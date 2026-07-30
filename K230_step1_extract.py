@@ -439,7 +439,7 @@ def draw_targets(rotated_frame, target_positions, matched):
     all_cy = [v["cy"] for v in piece_outlines.values()]
     group_cx = sum(all_cx) / len(all_cx)
     group_cy = sum(all_cy) / len(all_cy)
-    SHRINK = 0.82  # 压缩系数，消除标定间隙
+    SHRINK = 0.55  # 压缩系数，消除标定间隙
     for mid in piece_outlines:
         o = piece_outlines[mid]
         dx = o["cx"] - group_cx
