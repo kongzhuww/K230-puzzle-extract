@@ -151,6 +151,14 @@ def extract_pieces(frame):
                 break
         if len(pts) < 3:
             continue
+        # 统一为逆时针方向
+        n = len(pts)
+        signed_area = 0
+        for i in range(n):
+            j = (i + 1) % n
+            signed_area += pts[i][0] * pts[j][1] - pts[j][0] * pts[i][1]
+        if signed_area > 0:  # 顺时针则反转
+            pts = pts[::-1]
         n = len(pts)
         edges = [dist(pts[i], pts[(i+1)%n]) for i in range(n)]
         pieces.append({
