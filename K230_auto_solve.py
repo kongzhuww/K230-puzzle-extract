@@ -161,32 +161,25 @@ def extract_pieces(frame):
             pts = pts[::-1]
         n = len(pts)
         edges = [dist(pts[i], pts[(i+1)%n]) for i in range(n)]
-        pieces.append({
-            "cx": cx, "cy": cy, "area": area,
-            "pts": pts, "edges": edges,
-        })
     return pieces
 
 
 # -------------------- 求解核心 --------------------
 def align_edge(src_pts, src_ei, dst_pts, dst_ei):
-    """刚体变换：src边反向平行于dst边，中点对齐"""
+    """中点对齐：src边反向平行于dst边"""
     ns, nd = len(src_pts), len(dst_pts)
     sa, sb = src_pts[src_ei], src_pts[(src_ei+1)%ns]
     da, db = dst_pts[dst_ei], dst_pts[(dst_ei+1)%nd]
-    # 旋转：src边方向 → dst边反方向
     src_ang = math.atan2(sb[1]-sa[1], sb[0]-sa[0])
     dst_ang = math.atan2(da[1]-db[1], da[0]-db[0])
     rot = dst_ang - src_ang
     cos_r, sin_r = math.cos(rot), math.sin(rot)
-    # 以src边中点为旋转中心
     smx, smy = (sa[0]+sb[0])/2, (sa[1]+sb[1])/2
     rotated = []
     for x, y in src_pts:
         dx, dy = x - smx, y - smy
         rotated.append((dx*cos_r - dy*sin_r + smx,
                         dx*sin_r + dy*cos_r + smy))
-    # 平移：旋转后的src中点 → dst边中点
     r_smx = (rotated[src_ei][0] + rotated[(src_ei+1)%ns][0]) / 2
     r_smy = (rotated[src_ei][1] + rotated[(src_ei+1)%ns][1]) / 2
     dmx, dmy = (da[0]+db[0])/2, (da[1]+db[1])/2
@@ -195,7 +188,6 @@ def align_edge(src_pts, src_ei, dst_pts, dst_ei):
 
 
 def find_candidates(pieces):
-    """找所有边长相近的不同片边配对，按匹配精度排序"""
     cands = []
     n = len(pieces)
     for i in range(n):
@@ -210,13 +202,11 @@ def find_candidates(pieces):
                     err = abs(ei[ai] - ej[bi]) / avg
                     if err < EDGE_TOL:
                         cands.append((i, j, ai, bi, err))
-    # 误差最小的排前面（最可能是真正的内部切割边）
     cands.sort(key=lambda x: x[4])
     return cands[:MAX_CANDIDATES]
 
 
 def is_connected(edges, n_pieces):
-    """检查边集合是否连通所有片"""
     adj = [[] for _ in range(n_pieces)]
     for i, j, _, _, _ in edges:
         adj[i].append(j)
@@ -234,36 +224,7 @@ def is_connected(edges, n_pieces):
     return len(visited) == n_pieces
 
 
-def side_of_edge(edge_a, edge_b, point):
-    """点在边ab的哪一侧(叉积符号)"""
-    return (edge_b[0]-edge_a[0])*(point[1]-edge_a[1]) - \
-           (edge_b[1]-edge_a[1])*(point[0]-edge_a[0])
-
-
-def centroid(pts):
-    n = len(pts)
-    return (sum(p[0] for p in pts)/n, sum(p[1] for p in pts)/n)
-
-
-def flip_across_edge(pts, ea, eb):
-    """将pts沿边ea-eb镜像翻转"""
-    dx, dy = eb[0]-ea[0], eb[1]-ea[1]
-    length_sq = dx*dx + dy*dy
-    if length_sq < 1:
-        return pts
-    result = []
-    for x, y in pts:
-        # 投影到边上，然后镜像
-        px, py = x - ea[0], y - ea[1]
-        t = (px*dx + py*dy) / length_sq
-        proj_x = ea[0] + t*dx
-        proj_y = ea[1] + t*dy
-        result.append((2*proj_x - x, 2*proj_y - y))
-    return result
-
-
 def assemble(pieces, matchings):
-    """用一组匹配拼合所有片，确保新片在共享边对面"""
     n = len(pieces)
     placed = [None] * n
     placed[0] = pieces[0]["pts"]
@@ -273,33 +234,13 @@ def assemble(pieces, matchings):
         changed = False
         for pi, pj, ei, ej, _ in matchings:
             if pi in done and pj not in done:
-                nd = len(placed[pi])
-                ea = placed[pi][ei]
-                eb = placed[pi][(ei+1) % nd]
-                new_pts = align_edge(pieces[pj]["pts"], ej, placed[pi], ei)
-                # 检查：新片质心应在已放片质心的对面
-                exist_c = centroid(placed[pi])
-                new_c = centroid(new_pts)
-                s_exist = side_of_edge(ea, eb, exist_c)
-                s_new = side_of_edge(ea, eb, new_c)
-                if s_exist * s_new > 0:
-                    # 同一侧！翻转到对面
-                    new_pts = flip_across_edge(new_pts, ea, eb)
-                placed[pj] = new_pts
+                placed[pj] = align_edge(
+                    pieces[pj]["pts"], ej, placed[pi], ei)
                 done.add(pj)
                 changed = True
             elif pj in done and pi not in done:
-                nd = len(placed[pj])
-                ea = placed[pj][ej]
-                eb = placed[pj][(ej+1) % nd]
-                new_pts = align_edge(pieces[pi]["pts"], ei, placed[pj], ej)
-                exist_c = centroid(placed[pj])
-                new_c = centroid(new_pts)
-                s_exist = side_of_edge(ea, eb, exist_c)
-                s_new = side_of_edge(ea, eb, new_c)
-                if s_exist * s_new > 0:
-                    new_pts = flip_across_edge(new_pts, ea, eb)
-                placed[pi] = new_pts
+                placed[pi] = align_edge(
+                    pieces[pi]["pts"], ei, placed[pj], ej)
                 done.add(pi)
                 changed = True
     if len(done) < n:
@@ -307,51 +248,12 @@ def assemble(pieces, matchings):
     return placed
 
 
-
-def convex_hull(points):
-    """Jarvis march求凸包"""
-    pts = []
-    seen = set()
-    for p in points:
-        key = (int(p[0]*10), int(p[1]*10))
-        if key not in seen:
-            seen.add(key)
-            pts.append(p)
-    n = len(pts)
-    if n < 3:
-        return pts
-    start = min(range(n), key=lambda i: (pts[i][0], pts[i][1]))
-    hull = []
-    current = start
-    for _ in range(n + 1):
-        hull.append(pts[current])
-        nxt = 0
-        for i in range(n):
-            if i == current:
-                continue
-            ox, oy = pts[current]
-            ax, ay = pts[nxt]
-            bx, by = pts[i]
-            cross = (ax-ox)*(by-oy) - (ay-oy)*(bx-ox)
-            if nxt == current or cross < 0:
-                nxt = i
-            elif cross == 0:
-                da = (ax-ox)**2 + (ay-oy)**2
-                db = (bx-ox)**2 + (by-oy)**2
-                if db > da:
-                    nxt = i
-        current = nxt
-        if current == start:
-            break
-    return hull
-
-
 def score(placed):
-    """评分：fill接近1 + 凸包必须是矩形"""
+    """评分：凸包面积填充 × 宽高比接近5:3"""
     all_pts = []
     for pts in placed:
         all_pts.extend(pts)
-    if len(all_pts) < 3:
+    if len(all_pts) < 4:
         return 0
     piece_area = sum(poly_area(pts) for pts in placed)
     hull = convex_hull(all_pts)
@@ -363,68 +265,35 @@ def score(placed):
         fill_score = max(0, 1.0 - (fill - 1.0) * 3)
     else:
         fill_score = fill
-
-    # 去共线点简化凸包(容忍检测噪声)
-    n = len(hull)
-    simple = []
-    for i in range(n):
-        a = hull[(i-1) % n]
-        b = hull[i]
-        c = hull[(i+1) % n]
-        ac = dist(a, c)
-        if ac < 1:
-            continue
-        # b到ac连线的距离 / ac长度 > 8%才保留
-        d = abs((b[0]-a[0])*(c[1]-a[1]) - (b[1]-a[1])*(c[0]-a[0])) / ac
-        if d < ac * 0.08:
-            continue
-        simple.append(b)
-    ns = len(simple)
-    if ns == 4:
-        # 检查4个角是否接近90度
-        angle_err = 0
-        for i in range(4):
-            a = simple[(i-1) % 4]
-            b = simple[i]
-            c = simple[(i+1) % 4]
-            ba = (a[0]-b[0], a[1]-b[1])
-            bc = (c[0]-b[0], c[1]-b[1])
-            dot = ba[0]*bc[0] + ba[1]*bc[1]
-            mag = math.sqrt(ba[0]**2+ba[1]**2) * math.sqrt(bc[0]**2+bc[1]**2)
-            if mag < 1:
-                angle_err += 90
-                continue
-            cos_a = max(-1, min(1, dot / mag))
-            ang = math.degrees(math.acos(cos_a))
-            angle_err += abs(ang - 90)
-        # 更宽松：平均偏差30°以内都可接受
-        rect_score = max(0, 1.0 - angle_err / 200)
-        # 宽高比必须接近5:3(=1.67)
-        edges_s = []
-        for i in range(4):
-            edges_s.append(dist(simple[i], simple[(i+1)%4]))
-        edges_s.sort()
-        short = (edges_s[0] + edges_s[1]) / 2
-        long = (edges_s[2] + edges_s[3]) / 2
-        if short > 0:
-            aspect = long / short
-            # 目标1.67，容忍±0.4
-            aspect_err = abs(aspect - 1.67)
-            aspect_score = max(0, 1.0 - aspect_err / 0.6)
-        else:
-            aspect_score = 0
-        rect_score *= aspect_score
-    elif ns == 5:
-        rect_score = 0.4
-    elif ns == 3:
-        rect_score = 0.3
-    else:
-        rect_score = 0.15
-    return fill_score * rect_score
+    # 用凸包最长边定方向，算真实宽高比
+    nh = len(hull)
+    max_edge_len = 0
+    long_dx, long_dy = 1, 0
+    for i in range(nh):
+        dx = hull[(i+1)%nh][0] - hull[i][0]
+        dy = hull[(i+1)%nh][1] - hull[i][1]
+        el = math.sqrt(dx*dx + dy*dy)
+        if el > max_edge_len:
+            max_edge_len = el
+            long_dx, long_dy = dx/el, dy/el
+    # 投影到长轴和短轴
+    proj_long = []
+    proj_short = []
+    for x, y in hull:
+        proj_long.append(x*long_dx + y*long_dy)
+        proj_short.append(-x*long_dy + y*long_dx)
+    w = max(proj_long) - min(proj_long)
+    h = max(proj_short) - min(proj_short)
+    if h < 1:
+        return 0
+    aspect = w / h if w > h else h / w
+    # 目标5:3=1.667，容忍±0.5
+    aspect_err = abs(aspect - 1.667)
+    aspect_score = max(0, 1.0 - aspect_err / 0.8)
+    return fill_score * aspect_score
 
 
 def solve(pieces):
-    """边配对枚举求解"""
     if len(pieces) != 4:
         return None, 0
     cands = find_candidates(pieces)
@@ -458,12 +327,6 @@ def solve(pieces):
                 if s > best_score:
                     best_score = s
                     best_placed = placed
-                    print("  combo[%d]: P%d-e%d~P%d-e%d, P%d-e%d~P%d-e%d, P%d-e%d~P%d-e%d => %.0f%%" % (
-                        tried,
-                        combo[0][0]+1, combo[0][2], combo[0][1]+1, combo[0][3],
-                        combo[1][0]+1, combo[1][2], combo[1][1]+1, combo[1][3],
-                        combo[2][0]+1, combo[2][2], combo[2][1]+1, combo[2][3],
-                        s*100))
                 tried += 1
                 if tried >= MAX_COMBOS:
                     break
