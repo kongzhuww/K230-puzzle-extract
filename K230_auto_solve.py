@@ -246,32 +246,61 @@ def assemble(pieces, matchings):
 
 
 
+def convex_hull(points):
+    """Jarvis march求凸包"""
+    pts = []
+    seen = set()
+    for p in points:
+        key = (int(p[0]*10), int(p[1]*10))
+        if key not in seen:
+            seen.add(key)
+            pts.append(p)
+    n = len(pts)
+    if n < 3:
+        return pts
+    start = min(range(n), key=lambda i: (pts[i][0], pts[i][1]))
+    hull = []
+    current = start
+    for _ in range(n + 1):
+        hull.append(pts[current])
+        nxt = 0
+        for i in range(n):
+            if i == current:
+                continue
+            ox, oy = pts[current]
+            ax, ay = pts[nxt]
+            bx, by = pts[i]
+            cross = (ax-ox)*(by-oy) - (ay-oy)*(bx-ox)
+            if nxt == current or cross < 0:
+                nxt = i
+            elif cross == 0:
+                da = (ax-ox)**2 + (ay-oy)**2
+                db = (bx-ox)**2 + (by-oy)**2
+                if db > da:
+                    nxt = i
+        current = nxt
+        if current == start:
+            break
+    return hull
+
+
 def score(placed):
-    """评分：fill越接近1.0越好。允许微小重叠(检测噪声)"""
+    """评分：piece_area / convex_hull_area（不受旋转影响）"""
     all_pts = []
     for pts in placed:
         all_pts.extend(pts)
-    xs = [p[0] for p in all_pts]
-    ys = [p[1] for p in all_pts]
-    bw = max(xs) - min(xs)
-    bh = max(ys) - min(ys)
-    if bw < 1 or bh < 1:
+    if len(all_pts) < 3:
         return 0
-    bbox_area = bw * bh
     piece_area = sum(poly_area(pts) for pts in placed)
-    fill = piece_area / bbox_area
-    # fill=1.0最好，>1有重叠但正确配对，<1有间隙可能错误
+    hull = convex_hull(all_pts)
+    hull_area = poly_area(hull)
+    if hull_area < 1:
+        return 0
+    fill = piece_area / hull_area
     if fill > 1.0:
-        # 轻微重叠(1.0~1.15)说明拓扑对了只是噪声
         s = max(0, 1.0 - (fill - 1.0) * 3)
     else:
         s = fill
-    # 宽高比太极端说明配对有问题
-    ratio = max(bw, bh) / min(bw, bh)
-    if ratio > 3.0:
-        s *= 0.4
-    elif ratio > 2.5:
-        s *= 0.7
     return s
 
 
