@@ -285,7 +285,7 @@ def convex_hull(points):
 
 
 def score(placed):
-    """评分：piece_area / convex_hull_area（不受旋转影响）"""
+    """评分：fill接近1 + 凸包必须是矩形"""
     all_pts = []
     for pts in placed:
         all_pts.extend(pts)
@@ -298,10 +298,55 @@ def score(placed):
         return 0
     fill = piece_area / hull_area
     if fill > 1.0:
-        s = max(0, 1.0 - (fill - 1.0) * 3)
+        fill_score = max(0, 1.0 - (fill - 1.0) * 3)
     else:
-        s = fill
-    return s
+        fill_score = fill
+
+    # 矩形度：凸包必须接近4边形且角度接近90度
+    n = len(hull)
+    if n < 3:
+        return 0
+    # 去共线点简化凸包
+    simple = []
+    for i in range(n):
+        a = hull[(i-1) % n]
+        b = hull[i]
+        c = hull[(i+1) % n]
+        ab = dist(a, b)
+        bc = dist(b, c)
+        ac = dist(a, c)
+        if ab < 1 or bc < 1:
+            continue
+        # 如果b几乎在ac线上就跳过
+        d = abs((b[0]-a[0])*(c[1]-a[1]) - (b[1]-a[1])*(c[0]-a[0]))
+        if d / ac < 3:
+            continue
+        simple.append(b)
+    ns = len(simple)
+    if ns == 4:
+        # 检查4个角是否接近90度
+        angle_err = 0
+        for i in range(4):
+            a = simple[(i-1) % 4]
+            b = simple[i]
+            c = simple[(i+1) % 4]
+            ba = (a[0]-b[0], a[1]-b[1])
+            bc = (c[0]-b[0], c[1]-b[1])
+            dot = ba[0]*bc[0] + ba[1]*bc[1]
+            mag = math.sqrt(ba[0]**2+ba[1]**2) * math.sqrt(bc[0]**2+bc[1]**2)
+            if mag < 1:
+                angle_err += 90
+                continue
+            cos_a = max(-1, min(1, dot / mag))
+            ang = math.degrees(math.acos(cos_a))
+            angle_err += abs(ang - 90)
+        # 平均角度误差：0=完美矩形, 45=很差
+        rect_score = max(0, 1.0 - angle_err / 120)
+    elif ns == 3 or ns == 5:
+        rect_score = 0.3
+    else:
+        rect_score = 0.1
+    return fill_score * rect_score
 
 
 def solve(pieces):
