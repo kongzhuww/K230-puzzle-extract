@@ -234,8 +234,36 @@ def is_connected(edges, n_pieces):
     return len(visited) == n_pieces
 
 
+def side_of_edge(edge_a, edge_b, point):
+    """点在边ab的哪一侧(叉积符号)"""
+    return (edge_b[0]-edge_a[0])*(point[1]-edge_a[1]) - \
+           (edge_b[1]-edge_a[1])*(point[0]-edge_a[0])
+
+
+def centroid(pts):
+    n = len(pts)
+    return (sum(p[0] for p in pts)/n, sum(p[1] for p in pts)/n)
+
+
+def flip_across_edge(pts, ea, eb):
+    """将pts沿边ea-eb镜像翻转"""
+    dx, dy = eb[0]-ea[0], eb[1]-ea[1]
+    length_sq = dx*dx + dy*dy
+    if length_sq < 1:
+        return pts
+    result = []
+    for x, y in pts:
+        # 投影到边上，然后镜像
+        px, py = x - ea[0], y - ea[1]
+        t = (px*dx + py*dy) / length_sq
+        proj_x = ea[0] + t*dx
+        proj_y = ea[1] + t*dy
+        result.append((2*proj_x - x, 2*proj_y - y))
+    return result
+
+
 def assemble(pieces, matchings):
-    """用一组匹配拼合所有片，返回 placed 列表"""
+    """用一组匹配拼合所有片，确保新片在共享边对面"""
     n = len(pieces)
     placed = [None] * n
     placed[0] = pieces[0]["pts"]
@@ -245,13 +273,33 @@ def assemble(pieces, matchings):
         changed = False
         for pi, pj, ei, ej, _ in matchings:
             if pi in done and pj not in done:
-                placed[pj] = align_edge(
-                    pieces[pj]["pts"], ej, placed[pi], ei)
+                nd = len(placed[pi])
+                ea = placed[pi][ei]
+                eb = placed[pi][(ei+1) % nd]
+                new_pts = align_edge(pieces[pj]["pts"], ej, placed[pi], ei)
+                # 检查：新片质心应在已放片质心的对面
+                exist_c = centroid(placed[pi])
+                new_c = centroid(new_pts)
+                s_exist = side_of_edge(ea, eb, exist_c)
+                s_new = side_of_edge(ea, eb, new_c)
+                if s_exist * s_new > 0:
+                    # 同一侧！翻转到对面
+                    new_pts = flip_across_edge(new_pts, ea, eb)
+                placed[pj] = new_pts
                 done.add(pj)
                 changed = True
             elif pj in done and pi not in done:
-                placed[pi] = align_edge(
-                    pieces[pi]["pts"], ei, placed[pj], ej)
+                nd = len(placed[pj])
+                ea = placed[pj][ej]
+                eb = placed[pj][(ej+1) % nd]
+                new_pts = align_edge(pieces[pi]["pts"], ei, placed[pj], ej)
+                exist_c = centroid(placed[pj])
+                new_c = centroid(new_pts)
+                s_exist = side_of_edge(ea, eb, exist_c)
+                s_new = side_of_edge(ea, eb, new_c)
+                if s_exist * s_new > 0:
+                    new_pts = flip_across_edge(new_pts, ea, eb)
+                placed[pi] = new_pts
                 done.add(pi)
                 changed = True
     if len(done) < n:
