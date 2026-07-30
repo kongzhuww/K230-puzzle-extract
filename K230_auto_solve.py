@@ -338,7 +338,10 @@ def solve(pieces):
                     best_placed = placed
                 tried += 1
                 if tried >= MAX_COMBOS:
-                    return best_placed, best_score
+                    break
+    # 低于90%视为失败
+    if best_score < 0.90:
+        return None, best_score
     return best_placed, best_score
 
 
@@ -448,7 +451,8 @@ def main():
                         print("SOLVED! score=%.0f%% time=%dms" % (
                             result[1]*100, dt))
                     else:
-                        print("SOLVE FAILED (%dms)" % dt)
+                        best_s = result[1] if result else 0
+                        print("FAILED best=%.0f%% (%dms)" % (best_s*100, dt))
                         result = None
                 raw = sensor.snapshot()
                 np_ref = raw.to_numpy_ref()
