@@ -386,6 +386,27 @@ def draw_debug(rotated_frame, pieces):
                 (8, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2)
 
 
+def draw_targets(rotated_frame, target_positions, matched):
+    """在LCD下半区画目标位置（黄色圆+ID），上半区画匹配箭头"""
+    for mid, tgt in target_positions.items():
+        # 目标位置画黄色圆圈 + ID标签
+        tx = tgt["cx"] * VISION_SCALE
+        ty = tgt["cy"] * VISION_SCALE
+        cv2.circle(rotated_frame, (tx, ty), 12, (0, 255, 255), 2)
+        cv2.putText(rotated_frame, "T%d" % mid, (tx + 14, ty + 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+
+    for mid, det in matched.items():
+        if mid in target_positions:
+            # 从当前位置画箭头指向目标
+            cx = det["cx"] * VISION_SCALE
+            cy = det["cy"] * VISION_SCALE
+            tx = target_positions[mid]["cx"] * VISION_SCALE
+            ty = target_positions[mid]["cy"] * VISION_SCALE
+            cv2.arrowedLine(rotated_frame, (cx, cy), (tx, ty),
+                            (255, 0, 255), 2, tipLength=0.15)
+
+
 # -------------------- 写死版：碎片模板 --------------------
 # 用边长比例匹配（最长边=1.0），不受距离缩放影响
 TEMPLATES = [
@@ -404,35 +425,38 @@ def get_edge_ratios(piece):
     return [e / longest for e in edges]
 
 
+def _try_match_ratios(ratios, n):
+    """尝试用给定比例和边数匹配模板"""
+    best_id, best_err = None, float("inf")
+    for t in TEMPLATES:
+        if t["n"] == n and len(t["ratios"]) == len(ratios):
+            err = sum(abs(a-b) for a, b in zip(ratios, t["ratios"]))
+            if err < best_err:
+                best_err = err
+                best_id = t["id"]
+    return best_id, best_err
+
+
 def match_piece_to_template(piece):
-    """用边长比例匹配。处理三角形被误检为4边的情况"""
+    """用边长比例匹配，自动处理多检测1-2个假顶点的情况"""
     n = len(piece["proc_pts"])
     ratios = get_edge_ratios(piece)
 
-    # 如果是4边但最短边比例<0.1，当作3边尝试匹配
-    is_maybe_triangle = (n == 4 and ratios[-1] < 0.10)
+    # 直接匹配
+    best_id, best_err = _try_match_ratios(ratios, n)
 
-    best_id, best_err = None, float("inf")
-    for t in TEMPLATES:
-        if t["n"] == n:
-            # 直接比较
-            tr = t["ratios"]
-            err = sum(abs(a-b) for a, b in zip(ratios, tr))
-            if err < best_err:
-                best_err = err
-                best_id = t["id"]
-        elif t["n"] == 3 and is_maybe_triangle:
-            # 4边检测但可能是三角形：去掉最短边再比
-            tri_ratios = ratios[:3]
-            longest3 = tri_ratios[0] if tri_ratios[0] > 0 else 1
-            tri_ratios = [r / longest3 for r in tri_ratios]
-            tr = t["ratios"]
-            err = sum(abs(a-b) for a, b in zip(tri_ratios, tr))
-            if err < best_err:
-                best_err = err
-                best_id = t["id"]
+    # 如果有短边(比例<0.12)，尝试去掉短边后当 n-1 匹配
+    while len(ratios) > 3 and ratios[-1] < 0.12:
+        ratios = ratios[:-1]
+        reduced_n = len(ratios)
+        longest = ratios[0] if ratios[0] > 0 else 1
+        ratios_norm = [r / longest for r in ratios]
+        tid, terr = _try_match_ratios(ratios_norm, reduced_n)
+        if tid is not None and terr < best_err:
+            best_err = terr
+            best_id = tid
 
-    if best_err < MATCH_TOL_RATIO * max(n, 3):
+    if best_err < MATCH_TOL_RATIO * 4:
         return best_id
     return None
 
@@ -629,6 +653,8 @@ def main():
                         print("(未标定目标，长按按键先标定)")
 
                     draw_debug(rotated_frame, pieces)
+                    if target_positions:
+                        draw_targets(rotated_frame, target_positions, matched)
                     cv2.putText(rotated_frame, "[SNAPSHOT] press key to resume",
                                 (8, IMG_H - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                                 (255, 255, 255), 1)
