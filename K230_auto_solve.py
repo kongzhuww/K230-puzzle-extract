@@ -243,8 +243,49 @@ def assemble(pieces, matchings):
     return placed
 
 
+
+def vertex_angle(pts, i):
+    """计算顶点i处的内角(度)"""
+    n = len(pts)
+    a = pts[(i-1) % n]
+    b = pts[i]
+    c = pts[(i+1) % n]
+    ba = (a[0]-b[0], a[1]-b[1])
+    bc = (c[0]-b[0], c[1]-b[1])
+    dot = ba[0]*bc[0] + ba[1]*bc[1]
+    mag_ba = math.sqrt(ba[0]**2 + ba[1]**2)
+    mag_bc = math.sqrt(bc[0]**2 + bc[1]**2)
+    if mag_ba < 1 or mag_bc < 1:
+        return 180
+    cos_a = dot / (mag_ba * mag_bc)
+    cos_a = max(-1, min(1, cos_a))
+    return math.degrees(math.acos(cos_a))
+
+
+def find_right_angles(piece):
+    """返回接近90度的顶点索引列表"""
+    pts = piece["pts"]
+    result = []
+    for i in range(len(pts)):
+        ang = vertex_angle(pts, i)
+        if abs(ang - 90) < 20:
+            result.append(i)
+    return result
+
+
+def shrink_poly(pts, margin=8):
+    """向质心收缩多边形margin像素（用于宽松重合检测）"""
+    n = len(pts)
+    cx = sum(p[0] for p in pts) / n
+    cy = sum(p[1] for p in pts) / n
+    peri = sum(dist(pts[i], pts[(i+1)%n]) for i in range(n))
+    if peri < 1:
+        return pts
+    ratio = max(0, 1 - margin * n / peri)
+    return [(cx + (x-cx)*ratio, cy + (y-cy)*ratio) for x, y in pts]
+
+
 def point_in_poly(px, py, poly):
-    """射线法判断点是否在多边形内"""
     n = len(poly)
     inside = False
     j = n - 1
@@ -257,30 +298,24 @@ def point_in_poly(px, py, poly):
     return inside
 
 
-def pieces_overlap(pts_a, pts_b):
-    """检测两片是否重叠：任一顶点在对方内部即重叠"""
-    for x, y in pts_a:
-        if point_in_poly(x, y, pts_b):
-            return True
-    for x, y in pts_b:
-        if point_in_poly(x, y, pts_a):
-            return True
-    return False
-
-
-def has_any_overlap(placed):
-    """检查所有片之间是否有重叠"""
-    n = len(placed)
+def has_overlap(placed):
+    """宽松重合检测：收缩8px后检查"""
+    shrunk = [shrink_poly(pts) for pts in placed]
+    n = len(shrunk)
     for i in range(n):
         for j in range(i+1, n):
-            if pieces_overlap(placed[i], placed[j]):
-                return True
+            for x, y in shrunk[i]:
+                if point_in_poly(x, y, shrunk[j]):
+                    return True
+            for x, y in shrunk[j]:
+                if point_in_poly(x, y, shrunk[i]):
+                    return True
     return False
 
 
 def score(placed):
-    """评分：不重叠时fill越接近1.0越好，重叠直接0分"""
-    if has_any_overlap(placed):
+    """评分：不重合+fill接近1.0"""
+    if has_overlap(placed):
         return 0
     all_pts = []
     for pts in placed:
@@ -294,73 +329,71 @@ def score(placed):
     bbox_area = bw * bh
     piece_area = sum(poly_area(pts) for pts in placed)
     fill = piece_area / bbox_area
-    # 完美拼合 fill=1.0，重叠>1或间隙<1都扣分
     s = 1.0 - abs(1.0 - fill)
-    # 宽高比不合理也扣分
     ratio = max(bw, bh) / min(bw, bh)
     if ratio > 3.0:
         s *= 0.5
     return s
 
 
-def converge(placed):
-    """收束：将碎片向组中心等比缩放，提升填充率"""
-    n = len(placed)
-    # 计算各片质心
-    centers = []
-    for pts in placed:
-        cx = sum(p[0] for p in pts) / len(pts)
-        cy = sum(p[1] for p in pts) / len(pts)
-        centers.append((cx, cy))
-    gcx = sum(c[0] for c in centers) / n
-    gcy = sum(c[1] for c in centers) / n
-    best_placed = placed
-    best_s = score(placed)
-    # 逐步收缩 0.95, 0.90, ..., 0.50
-    for shrink_pct in range(95, 45, -5):
-        shrink = shrink_pct / 100.0
-        new_placed = []
-        for i in range(n):
-            cx, cy = centers[i]
-            ncx = gcx + (cx - gcx) * shrink
-            ncy = gcy + (cy - gcy) * shrink
-            dx, dy = ncx - cx, ncy - cy
-            new_placed.append([(x+dx, y+dy) for x, y in placed[i]])
-        s = score(new_placed)
-        if s > best_s:
-            best_s = s
-            best_placed = new_placed
-    return best_placed, best_s
+def place_at_corner(piece, vi, corner_x, corner_y, edge_ang1, edge_ang2):
+    """将piece的顶点vi放到corner位置，尝试两边对齐其中一个方向"""
+    pts = piece["pts"]
+    n = len(pts)
+    # 顶点vi处两边的方向
+    b = pts[vi]
+    a = pts[(vi-1)%n]
+    c = pts[(vi+1)%n]
+    ba_ang = math.atan2(a[1]-b[1], a[0]-b[0])
+    # 旋转使ba方向对齐edge_ang1
+    rot = edge_ang1 - ba_ang
+    cos_r, sin_r = math.cos(rot), math.sin(rot)
+    result = []
+    for x, y in pts:
+        dx, dy = x - b[0], y - b[1]
+        rx = dx*cos_r - dy*sin_r + corner_x
+        ry = dx*sin_r + dy*cos_r + corner_y
+        result.append((rx, ry))
+    return result
 
 
 def solve(pieces):
-    """求解4片拼成矩形的最佳方案"""
+    """角落优先求解"""
     if len(pieces) != 4:
-        return None
+        return None, 0
+    # 找每片的直角顶点
+    right_angles = []
+    for i, p in enumerate(pieces):
+        ra = find_right_angles(p)
+        right_angles.append(ra)
+
+    # 总面积算矩形大小
+    total_area = sum(poly_area(p["pts"]) for p in pieces)
+
+    # 枚举边配对方式(保留原有方法)
     cands = find_candidates(pieces)
     n = len(pieces)
     best_placed = None
     best_score = 0
     tried = 0
     nc = len(cands)
-    # 需要3条边连通4片，枚举C(nc,3)中有效的
+
     for i in range(nc):
         for j in range(i+1, nc):
             for k in range(j+1, nc):
                 combo = [cands[i], cands[j], cands[k]]
                 if not is_connected(combo, n):
                     continue
-                # 检查同一片的同一条边不能用两次
                 used_edges = set()
                 valid = True
                 for pi, pj, ei, ej, _ in combo:
-                    key_a = (pi, ei)
-                    key_b = (pj, ej)
-                    if key_a in used_edges or key_b in used_edges:
+                    ka = (pi, ei)
+                    kb = (pj, ej)
+                    if ka in used_edges or kb in used_edges:
                         valid = False
                         break
-                    used_edges.add(key_a)
-                    used_edges.add(key_b)
+                    used_edges.add(ka)
+                    used_edges.add(kb)
                 if not valid:
                     continue
                 placed = assemble(pieces, combo)
@@ -373,9 +406,11 @@ def solve(pieces):
                 tried += 1
                 if tried >= MAX_COMBOS:
                     break
-    # 返回最佳结果，不设阈值
+            if tried >= MAX_COMBOS:
+                break
+        if tried >= MAX_COMBOS:
+            break
     return best_placed, best_score
-
 
 # -------------------- 显示 --------------------
 def draw_solution(frame, placed):
