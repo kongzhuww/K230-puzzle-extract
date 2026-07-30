@@ -411,12 +411,12 @@ def compute_angle(pts):
 
 
 def draw_targets(rotated_frame, target_positions, matched):
-    """在下半区画紧凑的虚拟拼接预览"""
+    """在下半区画紧凑的虚拟拼接预览：用边对齐拼合"""
     if not matched or not target_positions:
         return
 
-    # 第一步：计算每片在目标角度下的轮廓(处理坐标)
-    piece_outlines = {}
+    # 第一步：将每片旋转到目标角度，得到相对质心的顶点
+    piece_shapes = {}
     for mid, det in matched.items():
         if mid not in target_positions:
             continue
@@ -424,38 +424,99 @@ def draw_targets(rotated_frame, target_positions, matched):
         cur_ang = compute_angle(det["proc_pts"])
         delta_ang = tgt["angle"] - cur_ang
         cur_cx, cur_cy = det["cx"], det["cy"]
-        tgt_cx, tgt_cy = tgt["cx"], tgt["cy"]
-        pts = []
+        rel_pts = []
         for x, y in det["proc_pts"]:
             rx, ry = rotate_point(x, y, cur_cx, cur_cy, delta_ang)
-            pts.append((rx - cur_cx + tgt_cx, ry - cur_cy + tgt_cy))
-        piece_outlines[mid] = {"pts": pts, "cx": tgt_cx, "cy": tgt_cy}
+            rel_pts.append((rx - cur_cx, ry - cur_cy))
+        piece_shapes[mid] = rel_pts
 
-    if not piece_outlines:
+    if len(piece_shapes) < 2:
         return
 
-    # 第二步：向组中心压缩，消除标定间隙
-    all_cx = [v["cx"] for v in piece_outlines.values()]
-    all_cy = [v["cy"] for v in piece_outlines.values()]
-    group_cx = sum(all_cx) / len(all_cx)
-    group_cy = sum(all_cy) / len(all_cy)
-    SHRINK = 0.55  # 压缩系数，消除标定间隙
-    for mid in piece_outlines:
-        o = piece_outlines[mid]
-        dx = o["cx"] - group_cx
-        dy = o["cy"] - group_cy
-        new_cx = group_cx + dx * SHRINK
-        new_cy = group_cy + dy * SHRINK
-        offset_x = new_cx - o["cx"]
-        offset_y = new_cy - o["cy"]
-        o["pts"] = [(x + offset_x, y + offset_y) for x, y in o["pts"]]
-        o["cx"] = new_cx
-        o["cy"] = new_cy
+    # 第二步：边对齐拼接
+    # 先把最大片放在原点，然后逐片对齐
+    placed = {}  # mid -> [(x,y), ...] 绝对坐标
+    placed_cx = {}  # mid -> (cx, cy)
 
-    # 第三步：缩放到下半区中央显示
+    # 找面积最大的片作起点
+    start_id = max(matched.keys(), key=lambda m: matched[m]["area"])
+    placed[start_id] = piece_shapes[start_id]
+    placed_cx[start_id] = (0, 0)
+
+    remaining = set(piece_shapes.keys()) - {start_id}
+
+    def edge_len(pts, i):
+        n = len(pts)
+        a, b = pts[i], pts[(i+1)%n]
+        return dist(a, b)
+
+    def edge_mid(pts, i):
+        n = len(pts)
+        a, b = pts[i], pts[(i+1)%n]
+        return ((a[0]+b[0])/2, (a[1]+b[1])/2)
+
+    def edge_vec(pts, i):
+        n = len(pts)
+        a, b = pts[i], pts[(i+1)%n]
+        return (b[0]-a[0], b[1]-a[1])
+
+    # 反复尝试把剩余片对齐到已放置的片
+    for _ in range(len(remaining) + 1):
+        if not remaining:
+            break
+        best = None
+        for rid in list(remaining):
+            r_pts = piece_shapes[rid]
+            nr = len(r_pts)
+            for pid in placed:
+                p_pts = placed[pid]
+                np_ = len(p_pts)
+                for ei in range(np_):
+                    el_p = edge_len(p_pts, ei)
+                    for ej in range(nr):
+                        el_r = edge_len(r_pts, ej)
+                        avg = (el_p + el_r) / 2
+                        if avg < 5:
+                            continue
+                        if abs(el_p - el_r) / avg < 0.15:
+                            if best is None or el_p > best[4]:
+                                best = (rid, pid, ei, ej, el_p)
+        if best is None:
+            break
+        rid, pid, ei, ej = best[0], best[1], best[2], best[3]
+        # 对齐：rid的边ej贴到pid的边ei
+        p_pts = placed[pid]
+        np_ = len(p_pts)
+        pa = p_pts[ei]
+        pb = p_pts[(ei+1)%np_]
+        r_pts = piece_shapes[rid]
+        nr = len(r_pts)
+        # rid的边ej反向对齐(ej+1->pa, ej->pb)
+        ra = r_pts[ej]
+        rb = r_pts[(ej+1)%nr]
+        # 计算平移：使r的边中点对齐到p的边中点，再往外法线偏移一点
+        pm = ((pa[0]+pb[0])/2, (pa[1]+pb[1])/2)
+        rm = ((ra[0]+rb[0])/2, (ra[1]+rb[1])/2)
+        dx = pm[0] - rm[0]
+        dy = pm[1] - rm[1]
+        new_pts = [(x+dx, y+dy) for x, y in r_pts]
+        placed[rid] = new_pts
+        new_cx = (dx, dy)
+        placed_cx[rid] = new_cx
+        remaining.discard(rid)
+
+    # 没拼上的碎片放到旁边
+    offset_x = 80
+    for rid in remaining:
+        placed[rid] = [(x+offset_x, y) for x, y in piece_shapes[rid]]
+        offset_x += 60
+
+    # 第三步：缩放到下半区中央
     all_pts = []
-    for o in piece_outlines.values():
-        all_pts.extend(o["pts"])
+    for pts in placed.values():
+        all_pts.extend(pts)
+    if not all_pts:
+        return
     xs = [p[0] for p in all_pts]
     ys = [p[1] for p in all_pts]
     min_x, max_x = min(xs), max(xs)
@@ -465,12 +526,11 @@ def draw_targets(rotated_frame, target_positions, matched):
     if shape_w < 1 or shape_h < 1:
         return
 
-    # 目标区域：下半区中央，留边距
     disp_x = 30
     disp_y = DIVIDER_LCD_Y + 20
     disp_w = IMG_W - 60
     disp_h = IMG_H - DIVIDER_LCD_Y - 50
-    scale = min(disp_w / shape_w, disp_h / shape_h) * 0.9
+    scale = min(disp_w / shape_w, disp_h / shape_h) * 0.85
     off_x = disp_x + (disp_w - shape_w * scale) / 2
     off_y = disp_y + (disp_h - shape_h * scale) / 2
 
@@ -478,20 +538,21 @@ def draw_targets(rotated_frame, target_positions, matched):
         return (int((px - min_x) * scale + off_x),
                 int((py - min_y) * scale + off_y))
 
-    # 画各片轮廓(橙色) + 质心(红点) + ID
-    for mid, o in piece_outlines.items():
-        lcd_pts = [to_lcd(x, y) for x, y in o["pts"]]
+    # 画各片
+    for mid, pts in placed.items():
+        lcd_pts = [to_lcd(x, y) for x, y in pts]
         n = len(lcd_pts)
         for i in range(n):
             cv2.line(rotated_frame, lcd_pts[i], lcd_pts[(i+1)%n],
                      (0, 128, 255), 2)
-        cx_lcd = to_lcd(o["cx"], o["cy"])
-        cv2.circle(rotated_frame, cx_lcd, 4, (0, 0, 255), -1)
+        cx_sum = sum(p[0] for p in lcd_pts) // n
+        cy_sum = sum(p[1] for p in lcd_pts) // n
+        cv2.circle(rotated_frame, (cx_sum, cy_sum), 4, (0, 0, 255), -1)
         cv2.putText(rotated_frame, "%d" % mid,
-                    (cx_lcd[0]+6, cx_lcd[1]-6),
+                    (cx_sum+6, cy_sum-6),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 128, 255), 1)
 
-    # 青色外框矩形
+    # 青色外框
     r_x1 = int(off_x - 4)
     r_y1 = int(off_y - 4)
     r_x2 = int(off_x + shape_w * scale + 4)
