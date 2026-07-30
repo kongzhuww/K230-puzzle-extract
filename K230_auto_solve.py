@@ -243,8 +243,45 @@ def assemble(pieces, matchings):
     return placed
 
 
+def point_in_poly(px, py, poly):
+    """射线法判断点是否在多边形内"""
+    n = len(poly)
+    inside = False
+    j = n - 1
+    for i in range(n):
+        xi, yi = poly[i]
+        xj, yj = poly[j]
+        if ((yi > py) != (yj > py)) and (px < (xj-xi)*(py-yi)/(yj-yi)+xi):
+            inside = not inside
+        j = i
+    return inside
+
+
+def pieces_overlap(pts_a, pts_b):
+    """检测两片是否重叠：任一顶点在对方内部即重叠"""
+    for x, y in pts_a:
+        if point_in_poly(x, y, pts_b):
+            return True
+    for x, y in pts_b:
+        if point_in_poly(x, y, pts_a):
+            return True
+    return False
+
+
+def has_any_overlap(placed):
+    """检查所有片之间是否有重叠"""
+    n = len(placed)
+    for i in range(n):
+        for j in range(i+1, n):
+            if pieces_overlap(placed[i], placed[j]):
+                return True
+    return False
+
+
 def score(placed):
-    """评分：fill=碎片总面积/外框面积，越接近1.0越好"""
+    """评分：不重叠时fill越接近1.0越好，重叠直接0分"""
+    if has_any_overlap(placed):
+        return 0
     all_pts = []
     for pts in placed:
         all_pts.extend(pts)
