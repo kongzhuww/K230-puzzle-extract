@@ -387,31 +387,52 @@ def draw_debug(rotated_frame, pieces):
 
 
 # -------------------- 写死版：碎片模板 --------------------
-# 实机检测值（边长px，从长到短排序）
+# 用边长比例匹配（最长边=1.0），不受距离缩放影响
 TEMPLATES = [
-    {"id": 1, "name": "大四边形", "n": 4, "edges": [146, 115, 55, 47]},
-    {"id": 2, "name": "窄四边形", "n": 4, "edges": [114, 77, 55, 13]},
-    {"id": 3, "name": "大三角形", "n": 3, "edges": [160, 114, 100]},
-    {"id": 4, "name": "小四边形", "n": 4, "edges": [53, 34, 32, 29]},
+    {"id": 1, "name": "大四边形", "n": 4, "ratios": [1.0, 0.79, 0.38, 0.32]},
+    {"id": 2, "name": "窄四边形", "n": 4, "ratios": [1.0, 0.68, 0.48, 0.11]},
+    {"id": 3, "name": "大三角形", "n": 3, "ratios": [1.0, 0.71, 0.63]},
+    {"id": 4, "name": "小四边形", "n": 4, "ratios": [1.0, 0.64, 0.60, 0.55]},
 ]
-MATCH_TOL_PX = 25  # 每条边允许误差px
+MATCH_TOL_RATIO = 0.15  # 比例误差容差
+
+
+def get_edge_ratios(piece):
+    """返回边长比例列表（从大到小，最长=1.0）"""
+    edges = sorted(piece["edges"], reverse=True)
+    longest = edges[0] if edges[0] > 0 else 1
+    return [e / longest for e in edges]
 
 
 def match_piece_to_template(piece):
-    """根据边数+边长匹配模板，返回模板id或None"""
+    """用边长比例匹配。处理三角形被误检为4边的情况"""
     n = len(piece["proc_pts"])
-    edges = sorted(piece["edges"], reverse=True)
+    ratios = get_edge_ratios(piece)
+
+    # 如果是4边但最短边比例<0.1，当作3边尝试匹配
+    is_maybe_triangle = (n == 4 and ratios[-1] < 0.10)
+
     best_id, best_err = None, float("inf")
     for t in TEMPLATES:
-        if t["n"] != n:
-            continue
-        if len(edges) != len(t["edges"]):
-            continue
-        err = sum(abs(a - b) for a, b in zip(edges, t["edges"]))
-        if err < best_err:
-            best_err = err
-            best_id = t["id"]
-    if best_err < MATCH_TOL_PX * n:
+        if t["n"] == n:
+            # 直接比较
+            tr = t["ratios"]
+            err = sum(abs(a-b) for a, b in zip(ratios, tr))
+            if err < best_err:
+                best_err = err
+                best_id = t["id"]
+        elif t["n"] == 3 and is_maybe_triangle:
+            # 4边检测但可能是三角形：去掉最短边再比
+            tri_ratios = ratios[:3]
+            longest3 = tri_ratios[0] if tri_ratios[0] > 0 else 1
+            tri_ratios = [r / longest3 for r in tri_ratios]
+            tr = t["ratios"]
+            err = sum(abs(a-b) for a, b in zip(tri_ratios, tr))
+            if err < best_err:
+                best_err = err
+                best_id = t["id"]
+
+    if best_err < MATCH_TOL_RATIO * max(n, 3):
         return best_id
     return None
 
