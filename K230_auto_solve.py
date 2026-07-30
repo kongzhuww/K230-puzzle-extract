@@ -35,9 +35,9 @@ MIN_EDGE_ABS_PX = 4
 MAX_VERTICES = 5
 SNAPSHOT_TRIALS = 5
 
-EDGE_TOL = 0.12
-MAX_CANDIDATES = 15
-MAX_COMBOS = 80
+EDGE_TOL = 0.20
+MAX_CANDIDATES = 20
+MAX_COMBOS = 150
 
 
 # -------------------- 工具函数 --------------------
@@ -247,7 +247,7 @@ def assemble(pieces, matchings):
 
 
 def score(placed):
-    """评分：填充率 * 宽高比接近度"""
+    """评分：填充率高+宽高比合理+无重叠"""
     all_pts = []
     for pts in placed:
         all_pts.extend(pts)
@@ -260,10 +260,44 @@ def score(placed):
     bbox_area = bw * bh
     piece_area = sum(poly_area(pts) for pts in placed)
     fill = piece_area / bbox_area
-    # 宽高比奖励(接近合理矩形)
+    # 填充率>1说明重叠严重，惩罚
+    if fill > 1.05:
+        fill = 0.5 / fill
+    # 宽高比：赛题矩形一般1.0~2.5
     ratio = max(bw, bh) / min(bw, bh)
-    ratio_score = 1.0 if ratio < 3 else 0.8
-    return fill * ratio_score
+    if ratio > 3.0:
+        return fill * 0.5
+    return fill
+
+
+def converge(placed):
+    """收束：将碎片向组中心等比缩放，提升填充率"""
+    n = len(placed)
+    # 计算各片质心
+    centers = []
+    for pts in placed:
+        cx = sum(p[0] for p in pts) / len(pts)
+        cy = sum(p[1] for p in pts) / len(pts)
+        centers.append((cx, cy))
+    gcx = sum(c[0] for c in centers) / n
+    gcy = sum(c[1] for c in centers) / n
+    best_placed = placed
+    best_s = score(placed)
+    # 逐步收缩 0.95, 0.90, ..., 0.50
+    for shrink_pct in range(95, 45, -5):
+        shrink = shrink_pct / 100.0
+        new_placed = []
+        for i in range(n):
+            cx, cy = centers[i]
+            ncx = gcx + (cx - gcx) * shrink
+            ncy = gcy + (cy - gcy) * shrink
+            dx, dy = ncx - cx, ncy - cy
+            new_placed.append([(x+dx, y+dy) for x, y in placed[i]])
+        s = score(new_placed)
+        if s > best_s:
+            best_s = s
+            best_placed = new_placed
+    return best_placed, best_s
 
 
 def solve(pieces):
@@ -412,8 +446,11 @@ def main():
                     result = solve(pieces)
                     dt = time.ticks_diff(time.ticks_ms(), t0)
                     if result and result[0]:
+                        # 收束优化
+                        placed, s = converge(result[0])
+                        result = (placed, s)
                         print("SOLVED! fill=%.0f%% time=%dms" % (
-                            result[1]*100, dt))
+                            s*100, dt))
                     else:
                         print("SOLVE FAILED (%dms)" % dt)
                         result = None
