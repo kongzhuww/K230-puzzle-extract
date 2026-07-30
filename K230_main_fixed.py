@@ -15,7 +15,7 @@ from media.media import *
 from media.sensor import *
 
 from config_pieces import PIECES, TARGETS, PIXELS_PER_CM
-from uart_protocol import Protocol
+# from uart_protocol import Protocol  # TODO: 连好串口后取消注释
 
 # -------------------- 硬件参数 --------------------
 CAMERA_W, CAMERA_H = 800, 480
@@ -265,7 +265,7 @@ def main():
     MediaManager.init()
     sensor.run()
 
-    proto = Protocol()
+    # proto = Protocol()  # TODO: 连好串口后取消注释
     frozen = False
     sent = False
 
@@ -301,8 +301,13 @@ def main():
                     best = max(frames, key=len)
                     matched = match_all(best)
                     moves = build_moves(matched)
-                    if moves:
-                        proto.send_all(moves)
+                    # TODO: 连好串口后取消注释
+                    # if moves:
+                    #     proto.send_all(moves)
+                    for m in moves:
+                        print("MOVE id=%d cur(%d,%d,%.1f) -> tgt(%d,%d,%.1f)" % (
+                            m["id"], m["cur_x"], m["cur_y"], m["cur_ang"]/10.0,
+                            m["tgt_x"], m["tgt_y"], m["tgt_ang"]/10.0))
                     rotated = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
                     draw_result(rotated, matched)
                     n_ok = len(matched)
