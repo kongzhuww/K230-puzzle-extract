@@ -435,64 +435,11 @@ def align_edge(src_pts, src_ei, dst_pts, dst_ei):
 
 
 
-def poly_area(pts):
-    n = len(pts)
-    a = 0
-    for i in range(n):
-        j = (i + 1) % n
-        a += pts[i][0] * pts[j][1]
-        a -= pts[j][0] * pts[i][1]
-    return abs(a) / 2.0
-
-
-def try_assemble(piece_shapes, matchings, start_id):
-    """尝试一组边配对方案进行拼接，返回 placed dict 或 None"""
-    placed = {start_id: piece_shapes[start_id]}
-    used = set()
-    remaining = set(piece_shapes.keys()) - {start_id}
-    changed = True
-    while changed and remaining:
-        changed = False
-        for mi in range(len(matchings)):
-            if mi in used:
-                continue
-            rid, pid, p_ei, r_ei = matchings[mi][0], matchings[mi][1], matchings[mi][2], matchings[mi][3]
-            if pid in placed and rid in remaining:
-                new_pts = align_edge(piece_shapes[rid], r_ei, placed[pid], p_ei)
-                placed[rid] = new_pts
-                remaining.discard(rid)
-                used.add(mi)
-                changed = True
-            elif rid in placed and pid in remaining:
-                new_pts = align_edge(piece_shapes[pid], p_ei, placed[rid], r_ei)
-                placed[pid] = new_pts
-                remaining.discard(pid)
-                used.add(mi)
-                changed = True
-    if remaining:
-        return None
-    return placed
-
-
-def score_assembly(placed, piece_shapes):
-    """评分：填充率越接近1.0越好（无重叠无间隙=1.0）"""
-    all_pts = []
-    for pts in placed.values():
-        all_pts.extend(pts)
-    xs = [p[0] for p in all_pts]
-    ys = [p[1] for p in all_pts]
-    bbox_area = (max(xs) - min(xs)) * (max(ys) - min(ys))
-    if bbox_area < 1:
-        return 0
-    total_piece_area = sum(poly_area(pts) for pts in placed.values())
-    fill = total_piece_area / bbox_area
-    return fill
-
-
 def draw_targets(rotated_frame, target_positions, matched):
+    """简洁版：用标定位置+压缩画拼接预览"""
     if not matched or not target_positions:
         return
-    piece_shapes = {}
+    pieces_data = []
     for mid, det in matched.items():
         if mid not in target_positions:
             continue
@@ -500,67 +447,27 @@ def draw_targets(rotated_frame, target_positions, matched):
         cur_ang = compute_angle(det["proc_pts"])
         delta_ang = tgt["angle"] - cur_ang
         cur_cx, cur_cy = det["cx"], det["cy"]
-        rel_pts = []
+        tgt_cx, tgt_cy = float(tgt["cx"]), float(tgt["cy"])
+        pts = []
         for x, y in det["proc_pts"]:
             rx, ry = rotate_point(x, y, cur_cx, cur_cy, delta_ang)
-            rel_pts.append((rx - cur_cx, ry - cur_cy))
-        piece_shapes[mid] = rel_pts
-    if len(piece_shapes) < 2:
+            pts.append((rx - cur_cx + tgt_cx, ry - cur_cy + tgt_cy))
+        pieces_data.append((mid, pts, tgt_cx, tgt_cy))
+    if not pieces_data:
         return
-
-    # 收集所有候选边配对(不同片之间边长相近的)
-    candidates = []
-    ids = list(piece_shapes.keys())
-    for i in range(len(ids)):
-        for j in range(i+1, len(ids)):
-            a_id, b_id = ids[i], ids[j]
-            a_pts, b_pts = piece_shapes[a_id], piece_shapes[b_id]
-            na, nb = len(a_pts), len(b_pts)
-            for ai in range(na):
-                el_a = dist(a_pts[ai], a_pts[(ai+1)%na])
-                for bi in range(nb):
-                    el_b = dist(b_pts[bi], b_pts[(bi+1)%nb])
-                    avg = (el_a + el_b) / 2
-                    if avg < 8:
-                        continue
-                    if abs(el_a - el_b) / avg < 0.15:
-                        candidates.append((b_id, a_id, ai, bi, el_a))
-    candidates.sort(key=lambda x: -x[4])
-    candidates = candidates[:20]
-
-    # 试不同组合(取top匹配，逐个尝试去掉一条看哪个最好)
-    start_id = max(piece_shapes.keys(), key=lambda m: matched[m]["area"])
-    best_placed = None
-    best_score = 0
-
-    # 方案1：全部候选
-    p = try_assemble(piece_shapes, candidates, start_id)
-    if p:
-        s = score_assembly(p, piece_shapes)
-        if s > best_score:
-            best_score = s
-            best_placed = p
-
-    # 方案2-6：去掉前5条中的每一条再试
-    for skip in range(min(5, len(candidates))):
-        subset = candidates[:skip] + candidates[skip+1:]
-        p = try_assemble(piece_shapes, subset, start_id)
-        if p:
-            s = score_assembly(p, piece_shapes)
-            if s > best_score:
-                best_score = s
-                best_placed = p
-
-    if best_placed is None:
-        return
-
-    placed = best_placed
-    print("FILL=%.1f%%" % (best_score * 100))
-
-    # 缩放到下半区
+    # 向组中心压缩
+    gcx = sum(d[2] for d in pieces_data) / len(pieces_data)
+    gcy = sum(d[3] for d in pieces_data) / len(pieces_data)
+    SHRINK = 0.6
     all_pts = []
-    for pts in placed.values():
-        all_pts.extend(pts)
+    placed = {}
+    for mid, pts, tcx, tcy in pieces_data:
+        dx = (tcx - gcx) * SHRINK + gcx - tcx
+        dy = (tcy - gcy) * SHRINK + gcy - tcy
+        moved = [(x + dx, y + dy) for x, y in pts]
+        placed[mid] = moved
+        all_pts.extend(moved)
+    # 缩放到下半区
     xs = [p[0] for p in all_pts]
     ys = [p[1] for p in all_pts]
     min_x, max_x = min(xs), max(xs)
@@ -569,10 +476,10 @@ def draw_targets(rotated_frame, target_positions, matched):
     shape_h = max_y - min_y
     if shape_w < 1 or shape_h < 1:
         return
-    disp_y = DIVIDER_LCD_Y + 20
+    disp_y = DIVIDER_LCD_Y + 25
     disp_w = IMG_W - 60
-    disp_h = IMG_H - DIVIDER_LCD_Y - 50
-    scale = min(disp_w / shape_w, disp_h / shape_h) * 0.85
+    disp_h = IMG_H - DIVIDER_LCD_Y - 55
+    scale = min(disp_w / shape_w, disp_h / shape_h) * 0.88
     off_x = 30 + (disp_w - shape_w * scale) / 2
     off_y = disp_y + (disp_h - shape_h * scale) / 2
     def to_lcd(px, py):
@@ -586,13 +493,11 @@ def draw_targets(rotated_frame, target_positions, matched):
         cx_s = sum(p[0] for p in lcd_pts) // n
         cy_s = sum(p[1] for p in lcd_pts) // n
         cv2.circle(rotated_frame, (cx_s, cy_s), 4, (0,0,255), -1)
+    # 外框
     all_lcd = [to_lcd(x, y) for pts in placed.values() for x, y in pts]
     lxs = [p[0] for p in all_lcd]
     lys = [p[1] for p in all_lcd]
     cv2.rectangle(rotated_frame, (min(lxs)-4, min(lys)-4), (max(lxs)+4, max(lys)+4), (0,255,255), 2)
-    cv2.putText(rotated_frame, "FILL %.0f%%" % (best_score*100),
-                (min(lxs), min(lys)-8), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0,255,0), 1)
-
 
 # -------------------- 写死版：碎片模板 --------------------
 # 用边长比例匹配（最长边=1.0），不受距离缩放影响
