@@ -19,19 +19,16 @@ from media.sensor import *
 # -------------------- 参数 --------------------
 CAMERA_W, CAMERA_H = 800, 480
 IMG_W, IMG_H = 480, 800
-VISION_SCALE = 2
-VISION_W, VISION_H = IMG_W // VISION_SCALE, IMG_H // VISION_SCALE
 
-DIVIDER_Y = VISION_H // 2
-DIVIDER_LCD_Y = DIVIDER_Y * VISION_SCALE
+DIVIDER_Y = IMG_H // 2  # 400: 上下分界
 BUTTON_PIN = 53
 
-MIN_AREA = 150
-MAX_AREA = 30000
+MIN_AREA = 600
+MAX_AREA = 120000
 APPROX_EPS_LIST = (0.008, 0.012, 0.018, 0.025, 0.035)
 COLLINEAR_TOL_PX = 2.0
 COLLINEAR_TOL_RATIO = 0.04
-MIN_EDGE_ABS_PX = 4
+MIN_EDGE_ABS_PX = 10
 MAX_VERTICES = 5
 SNAPSHOT_TRIALS = 5
 
@@ -357,9 +354,9 @@ def draw_solution(frame, placed):
     sw, sh = max_x - min_x, max_y - min_y
     if sw < 1 or sh < 1:
         return
-    disp_y = DIVIDER_LCD_Y + 25
+    disp_y = DIVIDER_Y + 25
     disp_w = IMG_W - 60
-    disp_h = IMG_H - DIVIDER_LCD_Y - 55
+    disp_h = IMG_H - DIVIDER_Y - 55
     scale = min(disp_w / sw, disp_h / sh) * 0.85
     off_x = 30 + (disp_w - sw * scale) / 2
     off_y = disp_y + (disp_h - sh * scale) / 2
@@ -381,14 +378,14 @@ def draw_solution(frame, placed):
 
 
 def draw_pieces_upper(frame, pieces):
-    cv2.line(frame, (0, DIVIDER_LCD_Y), (IMG_W, DIVIDER_LCD_Y), (255,0,0), 2)
+    cv2.line(frame, (0, DIVIDER_Y), (IMG_W, DIVIDER_Y), (255,0,0), 2)
     for idx, p in enumerate(pieces):
-        pts = [(x*VISION_SCALE, y*VISION_SCALE) for x, y in p["pts"]]
+        pts = p["pts"]
         n = len(pts)
         for i in range(n):
             cv2.line(frame, pts[i], pts[(i+1)%n], (0,255,0), 2)
-        cx = p["cx"] * VISION_SCALE
-        cy = p["cy"] * VISION_SCALE
+        cx = p["cx"]
+        cy = p["cy"]
         cv2.putText(frame, "P%d" % (idx+1), (cx-10, cy-10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,255,255), 1)
 
@@ -433,9 +430,8 @@ def main():
                     raw = sensor.snapshot()
                     np_ref = raw.to_numpy_ref()
                     rot = cv2.rotate(np_ref, cv2.ROTATE_90_CLOCKWISE)
-                    small = cv2.resize(rot, (VISION_W, VISION_H))
-                    pieces = extract_pieces(small)
-                    del small, rot, np_ref, raw
+                    pieces = extract_pieces(rot)
+                    del rot, np_ref, raw
                     if len(pieces) != 4:
                         time.sleep_ms(50)
                         continue
@@ -481,7 +477,7 @@ def main():
                 rot = cv2.rotate(np_ref, cv2.ROTATE_90_CLOCKWISE)
                 img = image.Image(IMG_W, IMG_H, image.RGB888,
                                   alloc=image.ALLOC_REF, data=rot)
-                img.draw_line(0, DIVIDER_LCD_Y, IMG_W, DIVIDER_LCD_Y,
+                img.draw_line(0, DIVIDER_Y, IMG_W, DIVIDER_Y,
                               color=(255,0,0), thickness=2)
                 img.draw_string_advanced(10, 10, 20,
                     "AUTO SOLVE (press key)", color=(255,255,255))
