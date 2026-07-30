@@ -244,79 +244,8 @@ def assemble(pieces, matchings):
 
 
 
-def vertex_angle(pts, i):
-    """计算顶点i处的内角(度)"""
-    n = len(pts)
-    a = pts[(i-1) % n]
-    b = pts[i]
-    c = pts[(i+1) % n]
-    ba = (a[0]-b[0], a[1]-b[1])
-    bc = (c[0]-b[0], c[1]-b[1])
-    dot = ba[0]*bc[0] + ba[1]*bc[1]
-    mag_ba = math.sqrt(ba[0]**2 + ba[1]**2)
-    mag_bc = math.sqrt(bc[0]**2 + bc[1]**2)
-    if mag_ba < 1 or mag_bc < 1:
-        return 180
-    cos_a = dot / (mag_ba * mag_bc)
-    cos_a = max(-1, min(1, cos_a))
-    return math.degrees(math.acos(cos_a))
-
-
-def find_right_angles(piece):
-    """返回接近90度的顶点索引列表"""
-    pts = piece["pts"]
-    result = []
-    for i in range(len(pts)):
-        ang = vertex_angle(pts, i)
-        if abs(ang - 90) < 20:
-            result.append(i)
-    return result
-
-
-def shrink_poly(pts, margin=8):
-    """向质心收缩多边形margin像素（用于宽松重合检测）"""
-    n = len(pts)
-    cx = sum(p[0] for p in pts) / n
-    cy = sum(p[1] for p in pts) / n
-    peri = sum(dist(pts[i], pts[(i+1)%n]) for i in range(n))
-    if peri < 1:
-        return pts
-    ratio = max(0, 1 - margin * n / peri)
-    return [(cx + (x-cx)*ratio, cy + (y-cy)*ratio) for x, y in pts]
-
-
-def point_in_poly(px, py, poly):
-    n = len(poly)
-    inside = False
-    j = n - 1
-    for i in range(n):
-        xi, yi = poly[i]
-        xj, yj = poly[j]
-        if ((yi > py) != (yj > py)) and (px < (xj-xi)*(py-yi)/(yj-yi)+xi):
-            inside = not inside
-        j = i
-    return inside
-
-
-def has_overlap(placed):
-    """宽松重合检测：收缩8px后检查"""
-    shrunk = [shrink_poly(pts) for pts in placed]
-    n = len(shrunk)
-    for i in range(n):
-        for j in range(i+1, n):
-            for x, y in shrunk[i]:
-                if point_in_poly(x, y, shrunk[j]):
-                    return True
-            for x, y in shrunk[j]:
-                if point_in_poly(x, y, shrunk[i]):
-                    return True
-    return False
-
-
 def score(placed):
-    """评分：不重合+fill接近1.0"""
-    if has_overlap(placed):
-        return 0
+    """评分：fill越接近1.0越好。允许微小重叠(检测噪声)"""
     all_pts = []
     for pts in placed:
         all_pts.extend(pts)
@@ -329,55 +258,31 @@ def score(placed):
     bbox_area = bw * bh
     piece_area = sum(poly_area(pts) for pts in placed)
     fill = piece_area / bbox_area
-    s = 1.0 - abs(1.0 - fill)
+    # fill=1.0最好，>1有重叠但正确配对，<1有间隙可能错误
+    if fill > 1.0:
+        # 轻微重叠(1.0~1.15)说明拓扑对了只是噪声
+        s = max(0, 1.0 - (fill - 1.0) * 3)
+    else:
+        s = fill
+    # 宽高比太极端说明配对有问题
     ratio = max(bw, bh) / min(bw, bh)
     if ratio > 3.0:
-        s *= 0.5
+        s *= 0.4
+    elif ratio > 2.5:
+        s *= 0.7
     return s
 
 
-def place_at_corner(piece, vi, corner_x, corner_y, edge_ang1, edge_ang2):
-    """将piece的顶点vi放到corner位置，尝试两边对齐其中一个方向"""
-    pts = piece["pts"]
-    n = len(pts)
-    # 顶点vi处两边的方向
-    b = pts[vi]
-    a = pts[(vi-1)%n]
-    c = pts[(vi+1)%n]
-    ba_ang = math.atan2(a[1]-b[1], a[0]-b[0])
-    # 旋转使ba方向对齐edge_ang1
-    rot = edge_ang1 - ba_ang
-    cos_r, sin_r = math.cos(rot), math.sin(rot)
-    result = []
-    for x, y in pts:
-        dx, dy = x - b[0], y - b[1]
-        rx = dx*cos_r - dy*sin_r + corner_x
-        ry = dx*sin_r + dy*cos_r + corner_y
-        result.append((rx, ry))
-    return result
-
-
 def solve(pieces):
-    """角落优先求解"""
+    """边配对枚举求解"""
     if len(pieces) != 4:
         return None, 0
-    # 找每片的直角顶点
-    right_angles = []
-    for i, p in enumerate(pieces):
-        ra = find_right_angles(p)
-        right_angles.append(ra)
-
-    # 总面积算矩形大小
-    total_area = sum(poly_area(p["pts"]) for p in pieces)
-
-    # 枚举边配对方式(保留原有方法)
     cands = find_candidates(pieces)
     n = len(pieces)
     best_placed = None
     best_score = 0
     tried = 0
     nc = len(cands)
-
     for i in range(nc):
         for j in range(i+1, nc):
             for k in range(j+1, nc):
