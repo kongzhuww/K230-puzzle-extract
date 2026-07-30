@@ -303,6 +303,7 @@ def score(placed):
         fill_score = fill
 
     # 去共线点简化凸包(容忍检测噪声)
+    n = len(hull)
     simple = []
     for i in range(n):
         a = hull[(i-1) % n]
