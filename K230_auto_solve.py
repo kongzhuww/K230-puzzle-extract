@@ -336,9 +336,7 @@ def solve(pieces):
                 tried += 1
                 if tried >= MAX_COMBOS:
                     break
-    # 低于90%视为失败
-    if best_score < 0.90:
-        return None, best_score
+    # 返回最佳结果，不设阈值
     return best_placed, best_score
 
 
@@ -423,10 +421,10 @@ def main():
                         time.sleep_ms(10)
             if is_frozen and not frozen_done:
                 gc.collect()
-                solved = False
-                attempt = 0
-                while not solved and attempt < 60:
-                    attempt += 1
+                best_result = None
+                best_score = 0
+                best_pieces = []
+                for attempt in range(1, 61):
                     raw = sensor.snapshot()
                     np_ref = raw.to_numpy_ref()
                     rot = cv2.rotate(np_ref, cv2.ROTATE_90_CLOCKWISE)
@@ -436,31 +434,34 @@ def main():
                         time.sleep_ms(50)
                         continue
                     result = solve(pieces)
-                    if result and result[0]:
-                        print("#%d SOLVED! score=%.0f%%" % (
-                            attempt, result[1]*100))
-                        solved = True
-                    else:
-                        best_s = result[1] if result else 0
-                        print("#%d best=%.0f%%" % (attempt, best_s*100))
-                        time.sleep_ms(50)
+                    if result and result[1] > best_score:
+                        best_score = result[1]
+                        best_result = result[0]
+                        best_pieces = pieces
+                        print("#%d NEW BEST=%.0f%%" % (attempt, best_score*100))
+                        if best_score >= 0.95:
+                            break
+                    if attempt % 10 == 0:
                         gc.collect()
+
+                pieces = best_pieces
+                print("FINAL score=%.0f%% (%d tries)" % (best_score*100, attempt))
 
                 # 显示结果
                 raw = sensor.snapshot()
                 np_ref = raw.to_numpy_ref()
                 disp = cv2.rotate(np_ref, cv2.ROTATE_90_CLOCKWISE)
                 draw_pieces_upper(disp, pieces)
-                if solved and result and result[0]:
+                if best_result:
                     try:
-                        draw_solution(disp, result[0])
-                        cv2.putText(disp, "SCORE %.0f%%" % (result[1]*100),
+                        draw_solution(disp, best_result)
+                        cv2.putText(disp, "BEST %.0f%%" % (best_score*100),
                                     (8, IMG_H-12), cv2.FONT_HERSHEY_SIMPLEX,
                                     0.5, (0,255,0), 1)
                     except Exception as e:
                         print("draw err:", e)
                 else:
-                    cv2.putText(disp, "FAILED %d tries" % attempt,
+                    cv2.putText(disp, "NO SOLUTION",
                                 (8, IMG_H-12), cv2.FONT_HERSHEY_SIMPLEX,
                                 0.5, (0,0,255), 1)
                 img = image.Image(IMG_W, IMG_H, image.RGB888,
