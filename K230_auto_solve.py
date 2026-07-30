@@ -181,7 +181,7 @@ def align_edge(src_pts, src_ei, dst_pts, dst_ei):
 
 
 def find_candidates(pieces):
-    """找所有边长相近的不同片边配对"""
+    """找所有边长相近的不同片边配对，按匹配精度排序"""
     cands = []
     n = len(pieces)
     for i in range(n):
@@ -191,11 +191,13 @@ def find_candidates(pieces):
             for ai in range(len(ei)):
                 for bi in range(len(ej)):
                     avg = (ei[ai] + ej[bi]) / 2
-                    if avg < 8:
+                    if avg < 15:
                         continue
-                    if abs(ei[ai] - ej[bi]) / avg < EDGE_TOL:
-                        cands.append((i, j, ai, bi, avg))
-    cands.sort(key=lambda x: -x[4])
+                    err = abs(ei[ai] - ej[bi]) / avg
+                    if err < EDGE_TOL:
+                        cands.append((i, j, ai, bi, err))
+    # 误差最小的排前面（最可能是真正的内部切割边）
+    cands.sort(key=lambda x: x[4])
     return cands[:MAX_CANDIDATES]
 
 
@@ -308,6 +310,12 @@ def solve(pieces):
                 if s > best_score:
                     best_score = s
                     best_placed = placed
+                    print("  combo[%d]: P%d-e%d~P%d-e%d, P%d-e%d~P%d-e%d, P%d-e%d~P%d-e%d => %.0f%%" % (
+                        tried,
+                        combo[0][0]+1, combo[0][2], combo[0][1]+1, combo[0][3],
+                        combo[1][0]+1, combo[1][2], combo[1][1]+1, combo[1][3],
+                        combo[2][0]+1, combo[2][2], combo[2][1]+1, combo[2][3],
+                        s*100))
                 tried += 1
                 if tried >= MAX_COMBOS:
                     break
