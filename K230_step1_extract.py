@@ -411,51 +411,92 @@ def compute_angle(pts):
 
 
 def draw_targets(rotated_frame, target_positions, matched):
-    """在下半区画虚拟拼接预览：每片蓝色轮廓 + 青色外框矩形"""
+    """在下半区画紧凑的虚拟拼接预览"""
     if not matched or not target_positions:
         return
 
-    all_target_pts = []
+    # 第一步：计算每片在目标角度下的轮廓(处理坐标)
+    piece_outlines = {}
     for mid, det in matched.items():
         if mid not in target_positions:
             continue
         tgt = target_positions[mid]
         cur_ang = compute_angle(det["proc_pts"])
         delta_ang = tgt["angle"] - cur_ang
-
-        # 将碎片顶点旋转到目标角度，平移到目标位置
         cur_cx, cur_cy = det["cx"], det["cy"]
         tgt_cx, tgt_cy = tgt["cx"], tgt["cy"]
-        target_pts = []
+        pts = []
         for x, y in det["proc_pts"]:
             rx, ry = rotate_point(x, y, cur_cx, cur_cy, delta_ang)
-            fx = (rx - cur_cx + tgt_cx) * VISION_SCALE
-            fy = (ry - cur_cy + tgt_cy) * VISION_SCALE
-            target_pts.append((int(fx), int(fy)))
+            pts.append((rx - cur_cx + tgt_cx, ry - cur_cy + tgt_cy))
+        piece_outlines[mid] = {"pts": pts, "cx": tgt_cx, "cy": tgt_cy}
 
-        # 画蓝色轮廓
-        n = len(target_pts)
+    if not piece_outlines:
+        return
+
+    # 第二步：向组中心压缩，消除标定间隙
+    all_cx = [v["cx"] for v in piece_outlines.values()]
+    all_cy = [v["cy"] for v in piece_outlines.values()]
+    group_cx = sum(all_cx) / len(all_cx)
+    group_cy = sum(all_cy) / len(all_cy)
+    SHRINK = 0.82  # 压缩系数，消除标定间隙
+    for mid in piece_outlines:
+        o = piece_outlines[mid]
+        dx = o["cx"] - group_cx
+        dy = o["cy"] - group_cy
+        new_cx = group_cx + dx * SHRINK
+        new_cy = group_cy + dy * SHRINK
+        offset_x = new_cx - o["cx"]
+        offset_y = new_cy - o["cy"]
+        o["pts"] = [(x + offset_x, y + offset_y) for x, y in o["pts"]]
+        o["cx"] = new_cx
+        o["cy"] = new_cy
+
+    # 第三步：缩放到下半区中央显示
+    all_pts = []
+    for o in piece_outlines.values():
+        all_pts.extend(o["pts"])
+    xs = [p[0] for p in all_pts]
+    ys = [p[1] for p in all_pts]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    shape_w = max_x - min_x
+    shape_h = max_y - min_y
+    if shape_w < 1 or shape_h < 1:
+        return
+
+    # 目标区域：下半区中央，留边距
+    disp_x = 30
+    disp_y = DIVIDER_LCD_Y + 20
+    disp_w = IMG_W - 60
+    disp_h = IMG_H - DIVIDER_LCD_Y - 50
+    scale = min(disp_w / shape_w, disp_h / shape_h) * 0.9
+    off_x = disp_x + (disp_w - shape_w * scale) / 2
+    off_y = disp_y + (disp_h - shape_h * scale) / 2
+
+    def to_lcd(px, py):
+        return (int((px - min_x) * scale + off_x),
+                int((py - min_y) * scale + off_y))
+
+    # 画各片轮廓(橙色) + 质心(红点) + ID
+    for mid, o in piece_outlines.items():
+        lcd_pts = [to_lcd(x, y) for x, y in o["pts"]]
+        n = len(lcd_pts)
         for i in range(n):
-            cv2.line(rotated_frame, target_pts[i], target_pts[(i+1)%n],
-                     (255, 100, 0), 2)
-        # 蓝色质心点
-        tcx = tgt_cx * VISION_SCALE
-        tcy = tgt_cy * VISION_SCALE
-        cv2.circle(rotated_frame, (int(tcx), int(tcy)), 5, (255, 0, 0), -1)
-        # ID标签
+            cv2.line(rotated_frame, lcd_pts[i], lcd_pts[(i+1)%n],
+                     (0, 128, 255), 2)
+        cx_lcd = to_lcd(o["cx"], o["cy"])
+        cv2.circle(rotated_frame, cx_lcd, 4, (0, 0, 255), -1)
         cv2.putText(rotated_frame, "%d" % mid,
-                    (int(tcx)+8, int(tcy)-8),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 100, 0), 1)
-        all_target_pts.extend(target_pts)
+                    (cx_lcd[0]+6, cx_lcd[1]-6),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 128, 255), 1)
 
-    # 画青色外框矩形（包围所有目标碎片）
-    if all_target_pts:
-        xs = [p[0] for p in all_target_pts]
-        ys = [p[1] for p in all_target_pts]
-        margin = 6
-        x1, y1 = min(xs) - margin, min(ys) - margin
-        x2, y2 = max(xs) + margin, max(ys) + margin
-        cv2.rectangle(rotated_frame, (x1, y1), (x2, y2), (0, 255, 255), 2)
+    # 青色外框矩形
+    r_x1 = int(off_x - 4)
+    r_y1 = int(off_y - 4)
+    r_x2 = int(off_x + shape_w * scale + 4)
+    r_y2 = int(off_y + shape_h * scale + 4)
+    cv2.rectangle(rotated_frame, (r_x1, r_y1), (r_x2, r_y2), (0, 255, 255), 2)
 
 
 # -------------------- 写死版：碎片模板 --------------------
