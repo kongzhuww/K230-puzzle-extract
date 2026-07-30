@@ -426,39 +426,36 @@ def main():
                         time.sleep_ms(10)
             if is_frozen and not frozen_done:
                 gc.collect()
-                best_pieces = []
-                for _ in range(SNAPSHOT_TRIALS):
+                solved = False
+                attempt = 0
+                while not solved and attempt < 30:
+                    attempt += 1
                     raw = sensor.snapshot()
                     np_ref = raw.to_numpy_ref()
                     rot = cv2.rotate(np_ref, cv2.ROTATE_90_CLOCKWISE)
                     small = cv2.resize(rot, (VISION_W, VISION_H))
-                    p = extract_pieces(small)
-                    if len(p) > len(best_pieces):
-                        best_pieces = p
+                    pieces = extract_pieces(small)
                     del small, rot, np_ref, raw
-                    time.sleep_ms(30)
-                pieces = best_pieces
-                print("DETECTED %d pieces" % len(pieces))
-                for i, p in enumerate(pieces):
-                    el = ["%dpx" % int(e) for e in p["edges"]]
-                    print("  P%d n=%d edges=%s" % (i+1, len(p["pts"]), el))
-                result = None
-                if len(pieces) == 4:
-                    t0 = time.ticks_ms()
+                    if len(pieces) != 4:
+                        time.sleep_ms(50)
+                        continue
                     result = solve(pieces)
-                    dt = time.ticks_diff(time.ticks_ms(), t0)
                     if result and result[0]:
-                        print("SOLVED! score=%.0f%% time=%dms" % (
-                            result[1]*100, dt))
+                        print("#%d SOLVED! score=%.0f%%" % (
+                            attempt, result[1]*100))
+                        solved = True
                     else:
                         best_s = result[1] if result else 0
-                        print("FAILED best=%.0f%% (%dms)" % (best_s*100, dt))
-                        result = None
+                        print("#%d best=%.0f%%" % (attempt, best_s*100))
+                        time.sleep_ms(50)
+                        gc.collect()
+
+                # 显示结果
                 raw = sensor.snapshot()
                 np_ref = raw.to_numpy_ref()
                 disp = cv2.rotate(np_ref, cv2.ROTATE_90_CLOCKWISE)
                 draw_pieces_upper(disp, pieces)
-                if result and result[0]:
+                if solved and result and result[0]:
                     try:
                         draw_solution(disp, result[0])
                         cv2.putText(disp, "SCORE %.0f%%" % (result[1]*100),
@@ -467,8 +464,9 @@ def main():
                     except Exception as e:
                         print("draw err:", e)
                 else:
-                    cv2.putText(disp, "SOLVE FAILED", (8, IMG_H-12),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,0,255), 1)
+                    cv2.putText(disp, "FAILED %d tries" % attempt,
+                                (8, IMG_H-12), cv2.FONT_HERSHEY_SIMPLEX,
+                                0.5, (0,0,255), 1)
                 img = image.Image(IMG_W, IMG_H, image.RGB888,
                                   alloc=image.ALLOC_REF, data=disp)
                 Display.show_image(img)
