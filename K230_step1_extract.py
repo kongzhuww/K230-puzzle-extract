@@ -541,11 +541,16 @@ def main():
     frozen_snapshot_done = False
     frozen_frame = None
     frozen_display_img = None
-    target_positions = {}  # {id: {"cx":, "cy":, "angle":}}
+    # 写死的目标位置（标定结果直接内嵌，不需要运行时标定）
+    target_positions = {
+        1: {"cx": 152, "cy": 347, "angle": 179.6},
+        2: {"cx": 152, "cy": 292, "angle": 169.7},
+        3: {"cx": 70,  "cy": 271, "angle": 134.1},
+        4: {"cx": 184, "cy": 241, "angle": 192.8},
+    }
 
-    print("=== K230 拼图  就绪 ===")
-    print("短按 = 检测上半区 + 匹配 + 输出移动")
-    print("长按(>1s) = 标定目标位置(把拼好的放下半区)")
+    print("=== K230 拼图(写死版) 就绪 ===")
+    print("按键 = 检测上半区 + 匹配 + 输出移动指令")
 
     try:
         while True:
@@ -554,37 +559,8 @@ def main():
 
             btn_val = button.value()
             if btn_val == 1 and last_btn_val == 0:
-                # 按下，计时判断长按/短按
-                press_start = time.ticks_ms()
                 time.sleep_ms(50)
-                while button.value() == 1:
-                    time.sleep_ms(10)
-                press_dur = time.ticks_diff(time.ticks_ms(), press_start)
-
-                if press_dur > 1000:
-                    # === 长按：标定模式 ===
-                    print("=== 标定目标位置 ===")
-                    raw_img = sensor.snapshot()
-                    np_ref = raw_img.to_numpy_ref()
-                    rotated = cv2.rotate(np_ref, cv2.ROTATE_90_CLOCKWISE)
-                    small = cv2.resize(rotated, (VISION_W, VISION_H))
-                    lower_pieces = extract_lower_half(small)
-                    print("下半区检测到 %d 片" % len(lower_pieces))
-                    for p in lower_pieces:
-                        mid = match_piece_to_template(p)
-                        if mid is not None:
-                            ang = compute_angle(p["proc_pts"])
-                            target_positions[mid] = {
-                                "cx": p["cx"], "cy": p["cy"], "angle": ang,
-                            }
-                            print("  ID%d(%s) 目标: cx=%d cy=%d ang=%.1f" % (
-                                mid, TEMPLATES[mid-1]["name"],
-                                p["cx"], p["cy"], ang))
-                    print("标定完成，已记录 %d 片目标" % len(target_positions))
-                    del np_ref, raw_img, rotated, small
-                    gc.collect()
-                else:
-                    # === 短按：冻结/解冻 ===
+                if button.value() == 1:
                     is_frozen = not is_frozen
                     if is_frozen:
                         frozen_snapshot_done = False
