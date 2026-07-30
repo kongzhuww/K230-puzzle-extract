@@ -410,12 +410,33 @@ def compute_angle(pts):
     return math.degrees(math.atan2(b[1]-a[1], b[0]-a[0])) % 360
 
 
+def align_edge(src_pts, src_ei, dst_pts, dst_ei):
+    ns = len(src_pts)
+    nd = len(dst_pts)
+    sa = src_pts[src_ei]
+    sb = src_pts[(src_ei+1) % ns]
+    da = dst_pts[dst_ei]
+    db = dst_pts[(dst_ei+1) % nd]
+    src_ang = math.atan2(sb[1]-sa[1], sb[0]-sa[0])
+    dst_ang = math.atan2(da[1]-db[1], da[0]-db[0])
+    rot = dst_ang - src_ang
+    cos_r = math.cos(rot)
+    sin_r = math.sin(rot)
+    rotated = []
+    for x, y in src_pts:
+        dx, dy = x - sa[0], y - sa[1]
+        rx = dx * cos_r - dy * sin_r
+        ry = dx * sin_r + dy * cos_r
+        rotated.append((rx + sa[0], ry + sa[1]))
+    ra = rotated[src_ei]
+    tx = db[0] - ra[0]
+    ty = db[1] - ra[1]
+    return [(x + tx, y + ty) for x, y in rotated]
+
+
 def draw_targets(rotated_frame, target_positions, matched):
-    """在下半区画紧凑的虚拟拼接预览：用边对齐拼合"""
     if not matched or not target_positions:
         return
-
-    # 第一步：将每片旋转到目标角度，得到相对质心的顶点
     piece_shapes = {}
     for mid, det in matched.items():
         if mid not in target_positions:
@@ -429,89 +450,42 @@ def draw_targets(rotated_frame, target_positions, matched):
             rx, ry = rotate_point(x, y, cur_cx, cur_cy, delta_ang)
             rel_pts.append((rx - cur_cx, ry - cur_cy))
         piece_shapes[mid] = rel_pts
-
     if len(piece_shapes) < 2:
         return
-
-    # 第二步：边对齐拼接
-    # 先把最大片放在原点，然后逐片对齐
-    placed = {}  # mid -> [(x,y), ...] 绝对坐标
-    placed_cx = {}  # mid -> (cx, cy)
-
-    # 找面积最大的片作起点
-    start_id = max(matched.keys(), key=lambda m: matched[m]["area"])
+    placed = {}
+    start_id = max(piece_shapes.keys(), key=lambda m: matched[m]["area"])
     placed[start_id] = piece_shapes[start_id]
-    placed_cx[start_id] = (0, 0)
-
     remaining = set(piece_shapes.keys()) - {start_id}
-
-    def edge_len(pts, i):
-        n = len(pts)
-        a, b = pts[i], pts[(i+1)%n]
-        return dist(a, b)
-
-    def edge_mid(pts, i):
-        n = len(pts)
-        a, b = pts[i], pts[(i+1)%n]
-        return ((a[0]+b[0])/2, (a[1]+b[1])/2)
-
-    def edge_vec(pts, i):
-        n = len(pts)
-        a, b = pts[i], pts[(i+1)%n]
-        return (b[0]-a[0], b[1]-a[1])
-
-    # 反复尝试把剩余片对齐到已放置的片
-    for _ in range(len(remaining) + 1):
+    for _ in range(10):
         if not remaining:
             break
         best = None
-        for rid in list(remaining):
+        for rid in remaining:
             r_pts = piece_shapes[rid]
             nr = len(r_pts)
             for pid in placed:
                 p_pts = placed[pid]
                 np_ = len(p_pts)
-                for ei in range(np_):
-                    el_p = edge_len(p_pts, ei)
-                    for ej in range(nr):
-                        el_r = edge_len(r_pts, ej)
+                for pi in range(np_):
+                    el_p = dist(p_pts[pi], p_pts[(pi+1)%np_])
+                    for ri in range(nr):
+                        el_r = dist(r_pts[ri], r_pts[(ri+1)%nr])
                         avg = (el_p + el_r) / 2
-                        if avg < 5:
+                        if avg < 8:
                             continue
                         if abs(el_p - el_r) / avg < 0.15:
                             if best is None or el_p > best[4]:
-                                best = (rid, pid, ei, ej, el_p)
+                                best = (rid, pid, pi, ri, el_p)
         if best is None:
             break
-        rid, pid, ei, ej = best[0], best[1], best[2], best[3]
-        # 对齐：rid的边ej贴到pid的边ei
-        p_pts = placed[pid]
-        np_ = len(p_pts)
-        pa = p_pts[ei]
-        pb = p_pts[(ei+1)%np_]
-        r_pts = piece_shapes[rid]
-        nr = len(r_pts)
-        # rid的边ej反向对齐(ej+1->pa, ej->pb)
-        ra = r_pts[ej]
-        rb = r_pts[(ej+1)%nr]
-        # 计算平移：使r的边中点对齐到p的边中点，再往外法线偏移一点
-        pm = ((pa[0]+pb[0])/2, (pa[1]+pb[1])/2)
-        rm = ((ra[0]+rb[0])/2, (ra[1]+rb[1])/2)
-        dx = pm[0] - rm[0]
-        dy = pm[1] - rm[1]
-        new_pts = [(x+dx, y+dy) for x, y in r_pts]
+        rid, pid, p_ei, r_ei = best[0], best[1], best[2], best[3]
+        new_pts = align_edge(piece_shapes[rid], r_ei, placed[pid], p_ei)
         placed[rid] = new_pts
-        new_cx = (dx, dy)
-        placed_cx[rid] = new_cx
         remaining.discard(rid)
-
-    # 没拼上的碎片放到旁边
-    offset_x = 80
+    ox = 80
     for rid in remaining:
-        placed[rid] = [(x+offset_x, y) for x, y in piece_shapes[rid]]
-        offset_x += 60
-
-    # 第三步：缩放到下半区中央
+        placed[rid] = [(x+ox, y) for x, y in piece_shapes[rid]]
+        ox += 50
     all_pts = []
     for pts in placed.values():
         all_pts.extend(pts)
@@ -525,40 +499,27 @@ def draw_targets(rotated_frame, target_positions, matched):
     shape_h = max_y - min_y
     if shape_w < 1 or shape_h < 1:
         return
-
-    disp_x = 30
     disp_y = DIVIDER_LCD_Y + 20
     disp_w = IMG_W - 60
     disp_h = IMG_H - DIVIDER_LCD_Y - 50
     scale = min(disp_w / shape_w, disp_h / shape_h) * 0.85
-    off_x = disp_x + (disp_w - shape_w * scale) / 2
+    off_x = 30 + (disp_w - shape_w * scale) / 2
     off_y = disp_y + (disp_h - shape_h * scale) / 2
-
     def to_lcd(px, py):
         return (int((px - min_x) * scale + off_x),
                 int((py - min_y) * scale + off_y))
-
-    # 画各片
     for mid, pts in placed.items():
         lcd_pts = [to_lcd(x, y) for x, y in pts]
         n = len(lcd_pts)
         for i in range(n):
-            cv2.line(rotated_frame, lcd_pts[i], lcd_pts[(i+1)%n],
-                     (0, 128, 255), 2)
-        cx_sum = sum(p[0] for p in lcd_pts) // n
-        cy_sum = sum(p[1] for p in lcd_pts) // n
-        cv2.circle(rotated_frame, (cx_sum, cy_sum), 4, (0, 0, 255), -1)
-        cv2.putText(rotated_frame, "%d" % mid,
-                    (cx_sum+6, cy_sum-6),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 128, 255), 1)
-
-    # 青色外框
-    r_x1 = int(off_x - 4)
-    r_y1 = int(off_y - 4)
-    r_x2 = int(off_x + shape_w * scale + 4)
-    r_y2 = int(off_y + shape_h * scale + 4)
-    cv2.rectangle(rotated_frame, (r_x1, r_y1), (r_x2, r_y2), (0, 255, 255), 2)
-
+            cv2.line(rotated_frame, lcd_pts[i], lcd_pts[(i+1)%n], (0,128,255), 2)
+        cx_s = sum(p[0] for p in lcd_pts) // n
+        cy_s = sum(p[1] for p in lcd_pts) // n
+        cv2.circle(rotated_frame, (cx_s, cy_s), 4, (0,0,255), -1)
+    all_lcd = [to_lcd(x, y) for pts in placed.values() for x, y in pts]
+    lxs = [p[0] for p in all_lcd]
+    lys = [p[1] for p in all_lcd]
+    cv2.rectangle(rotated_frame, (min(lxs)-4, min(lys)-4), (max(lxs)+4, max(lys)+4), (0,255,255), 2)
 
 # -------------------- 写死版：碎片模板 --------------------
 # 用边长比例匹配（最长边=1.0），不受距离缩放影响
