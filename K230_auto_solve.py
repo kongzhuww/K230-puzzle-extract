@@ -425,7 +425,7 @@ def main():
                 gc.collect()
                 solved = False
                 attempt = 0
-                while not solved and attempt < 30:
+                while not solved and attempt < 60:
                     attempt += 1
                     raw = sensor.snapshot()
                     np_ref = raw.to_numpy_ref()
