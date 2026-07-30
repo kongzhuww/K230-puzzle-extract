@@ -247,7 +247,7 @@ def assemble(pieces, matchings):
 
 
 def score(placed):
-    """评分：填充率高+宽高比合理+无重叠"""
+    """评分：fill=碎片总面积/外框面积，越接近1.0越好"""
     all_pts = []
     for pts in placed:
         all_pts.extend(pts)
@@ -260,14 +260,13 @@ def score(placed):
     bbox_area = bw * bh
     piece_area = sum(poly_area(pts) for pts in placed)
     fill = piece_area / bbox_area
-    # 填充率>1说明重叠严重，惩罚
-    if fill > 1.05:
-        fill = 0.5 / fill
-    # 宽高比：赛题矩形一般1.0~2.5
+    # 完美拼合 fill=1.0，重叠>1或间隙<1都扣分
+    s = 1.0 - abs(1.0 - fill)
+    # 宽高比不合理也扣分
     ratio = max(bw, bh) / min(bw, bh)
     if ratio > 3.0:
-        return fill * 0.5
-    return fill
+        s *= 0.5
+    return s
 
 
 def converge(placed):
@@ -446,11 +445,8 @@ def main():
                     result = solve(pieces)
                     dt = time.ticks_diff(time.ticks_ms(), t0)
                     if result and result[0]:
-                        # 收束优化
-                        placed, s = converge(result[0])
-                        result = (placed, s)
-                        print("SOLVED! fill=%.0f%% time=%dms" % (
-                            s*100, dt))
+                        print("SOLVED! score=%.0f%% time=%dms" % (
+                            result[1]*100, dt))
                     else:
                         print("SOLVE FAILED (%dms)" % dt)
                         result = None
@@ -461,7 +457,7 @@ def main():
                 if result and result[0]:
                     try:
                         draw_solution(disp, result[0])
-                        cv2.putText(disp, "FILL %.0f%%" % (result[1]*100),
+                        cv2.putText(disp, "SCORE %.0f%%" % (result[1]*100),
                                     (8, IMG_H-12), cv2.FONT_HERSHEY_SIMPLEX,
                                     0.5, (0,255,0), 1)
                     except Exception as e:
