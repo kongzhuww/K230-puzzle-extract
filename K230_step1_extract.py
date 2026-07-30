@@ -453,9 +453,10 @@ def try_assemble(piece_shapes, matchings, start_id):
     changed = True
     while changed and remaining:
         changed = False
-        for mi, (rid, pid, p_ei, r_ei) in enumerate(matchings):
+        for mi in range(len(matchings)):
             if mi in used:
                 continue
+            rid, pid, p_ei, r_ei = matchings[mi][0], matchings[mi][1], matchings[mi][2], matchings[mi][3]
             if pid in placed and rid in remaining:
                 new_pts = align_edge(piece_shapes[rid], r_ei, placed[pid], p_ei)
                 placed[rid] = new_pts
@@ -803,7 +804,10 @@ def main():
 
                     draw_debug(rotated_frame, pieces)
                     if target_positions:
-                        draw_targets(rotated_frame, target_positions, matched)
+                        try:
+                            draw_targets(rotated_frame, target_positions, matched)
+                        except Exception as e:
+                            print("draw_targets error:", e)
                     cv2.putText(rotated_frame, "[SNAPSHOT] press key to resume",
                                 (8, IMG_H - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                                 (255, 255, 255), 1)
