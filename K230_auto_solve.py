@@ -337,6 +337,21 @@ def score(placed):
             angle_err += abs(ang - 90)
         # 更宽松：平均偏差30°以内都可接受
         rect_score = max(0, 1.0 - angle_err / 200)
+        # 宽高比必须接近5:3(=1.67)
+        edges_s = []
+        for i in range(4):
+            edges_s.append(dist(simple[i], simple[(i+1)%4]))
+        edges_s.sort()
+        short = (edges_s[0] + edges_s[1]) / 2
+        long = (edges_s[2] + edges_s[3]) / 2
+        if short > 0:
+            aspect = long / short
+            # 目标1.67，容忍±0.4
+            aspect_err = abs(aspect - 1.67)
+            aspect_score = max(0, 1.0 - aspect_err / 0.6)
+        else:
+            aspect_score = 0
+        rect_score *= aspect_score
     elif ns == 5:
         rect_score = 0.4
     elif ns == 3:
