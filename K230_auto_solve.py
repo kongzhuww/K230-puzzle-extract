@@ -302,24 +302,18 @@ def score(placed):
     else:
         fill_score = fill
 
-    # 矩形度：凸包必须接近4边形且角度接近90度
-    n = len(hull)
-    if n < 3:
-        return 0
-    # 去共线点简化凸包
+    # 去共线点简化凸包(容忍检测噪声)
     simple = []
     for i in range(n):
         a = hull[(i-1) % n]
         b = hull[i]
         c = hull[(i+1) % n]
-        ab = dist(a, b)
-        bc = dist(b, c)
         ac = dist(a, c)
-        if ab < 1 or bc < 1:
+        if ac < 1:
             continue
-        # 如果b几乎在ac线上就跳过
-        d = abs((b[0]-a[0])*(c[1]-a[1]) - (b[1]-a[1])*(c[0]-a[0]))
-        if d / ac < 3:
+        # b到ac连线的距离 / ac长度 > 8%才保留
+        d = abs((b[0]-a[0])*(c[1]-a[1]) - (b[1]-a[1])*(c[0]-a[0])) / ac
+        if d < ac * 0.08:
             continue
         simple.append(b)
     ns = len(simple)
@@ -340,12 +334,14 @@ def score(placed):
             cos_a = max(-1, min(1, dot / mag))
             ang = math.degrees(math.acos(cos_a))
             angle_err += abs(ang - 90)
-        # 平均角度误差：0=完美矩形, 45=很差
-        rect_score = max(0, 1.0 - angle_err / 120)
-    elif ns == 3 or ns == 5:
+        # 更宽松：平均偏差30°以内都可接受
+        rect_score = max(0, 1.0 - angle_err / 200)
+    elif ns == 5:
+        rect_score = 0.4
+    elif ns == 3:
         rect_score = 0.3
     else:
-        rect_score = 0.1
+        rect_score = 0.15
     return fill_score * rect_score
 
 
