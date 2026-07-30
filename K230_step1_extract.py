@@ -386,25 +386,76 @@ def draw_debug(rotated_frame, pieces):
                 (8, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2)
 
 
-def draw_targets(rotated_frame, target_positions, matched):
-    """在LCD下半区画目标位置（黄色圆+ID），上半区画匹配箭头"""
-    for mid, tgt in target_positions.items():
-        # 目标位置画黄色圆圈 + ID标签
-        tx = tgt["cx"] * VISION_SCALE
-        ty = tgt["cy"] * VISION_SCALE
-        cv2.circle(rotated_frame, (tx, ty), 12, (0, 255, 255), 2)
-        cv2.putText(rotated_frame, "T%d" % mid, (tx + 14, ty + 5),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+def rotate_point(px, py, cx, cy, angle_deg):
+    """将点(px,py)绕(cx,cy)旋转angle_deg度"""
+    rad = math.radians(angle_deg)
+    cos_a = math.cos(rad)
+    sin_a = math.sin(rad)
+    dx, dy = px - cx, py - cy
+    nx = dx * cos_a - dy * sin_a + cx
+    ny = dx * sin_a + dy * cos_a + cy
+    return int(nx), int(ny)
 
+
+def compute_angle(pts):
+    """用最长边方向作为碎片朝向(deg)"""
+    n = len(pts)
+    best_i, best_d = 0, 0
+    for i in range(n):
+        d = dist(pts[i], pts[(i+1)%n])
+        if d > best_d:
+            best_d = d
+            best_i = i
+    a, b = pts[best_i], pts[(best_i+1)%n]
+    return math.degrees(math.atan2(b[1]-a[1], b[0]-a[0])) % 360
+
+
+def draw_targets(rotated_frame, target_positions, matched):
+    """在下半区画虚拟拼接预览：每片蓝色轮廓 + 青色外框矩形"""
+    if not matched or not target_positions:
+        return
+
+    all_target_pts = []
     for mid, det in matched.items():
-        if mid in target_positions:
-            # 从当前位置画箭头指向目标
-            cx = det["cx"] * VISION_SCALE
-            cy = det["cy"] * VISION_SCALE
-            tx = target_positions[mid]["cx"] * VISION_SCALE
-            ty = target_positions[mid]["cy"] * VISION_SCALE
-            cv2.arrowedLine(rotated_frame, (cx, cy), (tx, ty),
-                            (255, 0, 255), 2, tipLength=0.15)
+        if mid not in target_positions:
+            continue
+        tgt = target_positions[mid]
+        cur_ang = compute_angle(det["proc_pts"])
+        delta_ang = tgt["angle"] - cur_ang
+
+        # 将碎片顶点旋转到目标角度，平移到目标位置
+        cur_cx, cur_cy = det["cx"], det["cy"]
+        tgt_cx, tgt_cy = tgt["cx"], tgt["cy"]
+        target_pts = []
+        for x, y in det["proc_pts"]:
+            rx, ry = rotate_point(x, y, cur_cx, cur_cy, delta_ang)
+            fx = (rx - cur_cx + tgt_cx) * VISION_SCALE
+            fy = (ry - cur_cy + tgt_cy) * VISION_SCALE
+            target_pts.append((int(fx), int(fy)))
+
+        # 画蓝色轮廓
+        n = len(target_pts)
+        for i in range(n):
+            cv2.line(rotated_frame, target_pts[i], target_pts[(i+1)%n],
+                     (255, 100, 0), 2)
+        # 蓝色质心点
+        tcx = tgt_cx * VISION_SCALE
+        tcy = tgt_cy * VISION_SCALE
+        cv2.circle(rotated_frame, (int(tcx), int(tcy)), 5, (255, 0, 0), -1)
+        # ID标签
+        cv2.putText(rotated_frame, "%d" % mid,
+                    (int(tcx)+8, int(tcy)-8),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 100, 0), 1)
+        all_target_pts.extend(target_pts)
+
+    # 画青色外框矩形（包围所有目标碎片）
+    if all_target_pts:
+        xs = [p[0] for p in all_target_pts]
+        ys = [p[1] for p in all_target_pts]
+        margin = 6
+        x1, y1 = min(xs) - margin, min(ys) - margin
+        x2, y2 = max(xs) + margin, max(ys) + margin
+        cv2.rectangle(rotated_frame, (x1, y1), (x2, y2), (0, 255, 255), 2)
 
 
 # -------------------- 写死版：碎片模板 --------------------
@@ -460,19 +511,6 @@ def match_piece_to_template(piece):
         return best_id
     return None
 
-
-def compute_angle(pts):
-    """用最长边方向作为碎片朝向(deg)"""
-    n = len(pts)
-    best_i, best_d = 0, 0
-    for i in range(n):
-        d = dist(pts[i], pts[(i+1)%n])
-        if d > best_d:
-            best_d = d
-            best_i = i
-    a, b = pts[best_i], pts[(best_i+1)%n]
-    ang = math.atan2(b[1]-a[1], b[0]-a[0])
-    return math.degrees(ang) % 360
 
 
 def extract_lower_half(frame):
