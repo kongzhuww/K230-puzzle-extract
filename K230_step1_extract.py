@@ -416,6 +416,65 @@ def match_piece_to_template(piece):
     return None
 
 
+def compute_angle(pts):
+    """用最长边方向作为碎片朝向(deg)"""
+    n = len(pts)
+    best_i, best_d = 0, 0
+    for i in range(n):
+        d = dist(pts[i], pts[(i+1)%n])
+        if d > best_d:
+            best_d = d
+            best_i = i
+    a, b = pts[best_i], pts[(best_i+1)%n]
+    ang = math.atan2(b[1]-a[1], b[0]-a[0])
+    return math.degrees(ang) % 360
+
+
+def extract_lower_half(frame):
+    """提取下半区碎片（用于标定目标位置）"""
+    gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+    _, mask = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+    k = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, k)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    pieces = []
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if area < MIN_AREA or area > MAX_AREA:
+            continue
+        M = cv2.moments(cnt)
+        if M["m00"] == 0:
+            continue
+        cx = int(M["m10"] / M["m00"])
+        cy = int(M["m01"] / M["m00"])
+        if cy < DIVIDER_Y:
+            continue
+        hull = cv2.convexHull(cnt)
+        peri = cv2.arcLength(hull, True)
+        pts = []
+        for eps_r in APPROX_EPS_LIST:
+            approx = cv2.approxPolyDP(hull, peri * eps_r, True)
+            cand = parse_poly_points(approx)
+            if len(cand) < 3:
+                continue
+            cand = merge_collinear(cand, COLLINEAR_TOL_PX, COLLINEAR_TOL_RATIO)
+            cand = merge_short_vertices(cand, MIN_EDGE_ABS_PX)
+            if 3 <= len(cand) <= MAX_VERTICES:
+                pts = cand
+                break
+        if len(pts) < 3:
+            continue
+        n = len(pts)
+        edges = [dist(pts[i], pts[(i+1)%n]) for i in range(n)]
+        pieces.append({
+            "cx": cx, "cy": cy, "proc_pts": pts,
+            "edges": edges, "area": area,
+        })
+    return pieces
+
+
 # -------------------- 主程序 --------------------
 def main():
     fpioa = FPIOA()
@@ -437,19 +496,50 @@ def main():
     frozen_snapshot_done = False
     frozen_frame = None
     frozen_display_img = None
+    target_positions = {}  # {id: {"cx":, "cy":, "angle":}}
 
-    print("=== K230 拼图 第1步：提取调试  就绪 ===")
+    print("=== K230 拼图  就绪 ===")
+    print("短按 = 检测上半区 + 匹配 + 输出移动")
+    print("长按(>1s) = 标定目标位置(把拼好的放下半区)")
 
     try:
         while True:
             os.exitpoint()
             frame_cnt += 1
 
-            # 按键边沿检测：按下一次切换 冻结/解冻
             btn_val = button.value()
             if btn_val == 1 and last_btn_val == 0:
+                # 按下，计时判断长按/短按
+                press_start = time.ticks_ms()
                 time.sleep_ms(50)
-                if button.value() == 1:
+                while button.value() == 1:
+                    time.sleep_ms(10)
+                press_dur = time.ticks_diff(time.ticks_ms(), press_start)
+
+                if press_dur > 1000:
+                    # === 长按：标定模式 ===
+                    print("=== 标定目标位置 ===")
+                    raw_img = sensor.snapshot()
+                    np_ref = raw_img.to_numpy_ref()
+                    rotated = cv2.rotate(np_ref, cv2.ROTATE_90_CLOCKWISE)
+                    small = cv2.resize(rotated, (VISION_W, VISION_H))
+                    lower_pieces = extract_lower_half(small)
+                    print("下半区检测到 %d 片" % len(lower_pieces))
+                    for p in lower_pieces:
+                        mid = match_piece_to_template(p)
+                        if mid is not None:
+                            ang = compute_angle(p["proc_pts"])
+                            target_positions[mid] = {
+                                "cx": p["cx"], "cy": p["cy"], "angle": ang,
+                            }
+                            print("  ID%d(%s) 目标: cx=%d cy=%d ang=%.1f" % (
+                                mid, TEMPLATES[mid-1]["name"],
+                                p["cx"], p["cy"], ang))
+                    print("标定完成，已记录 %d 片目标" % len(target_positions))
+                    del np_ref, raw_img, rotated, small
+                    gc.collect()
+                else:
+                    # === 短按：冻结/解冻 ===
                     is_frozen = not is_frozen
                     if is_frozen:
                         frozen_snapshot_done = False
@@ -493,13 +583,29 @@ def main():
 
                     # 写死版匹配
                     print("--- MATCH ---")
+                    matched = {}
                     for idx, p in enumerate(pieces):
                         mid = match_piece_to_template(p)
                         if mid is not None:
                             name = TEMPLATES[mid - 1]["name"]
                             print("  P%d -> ID%d (%s)" % (idx+1, mid, name))
+                            matched[mid] = p
                         else:
                             print("  P%d -> ???" % (idx+1))
+
+                    # 输出移动指令
+                    if target_positions:
+                        print("--- MOVE ---")
+                        for mid, det in matched.items():
+                            if mid in target_positions:
+                                tgt = target_positions[mid]
+                                cur_ang = compute_angle(det["proc_pts"])
+                                delta_ang = tgt["angle"] - cur_ang
+                                print("  ID%d: (%d,%d,%.0f) -> (%d,%d,%.0f) d_ang=%.0f" % (
+                                    mid, det["cx"], det["cy"], cur_ang,
+                                    tgt["cx"], tgt["cy"], tgt["angle"], delta_ang))
+                    else:
+                        print("(未标定目标，长按按键先标定)")
 
                     draw_debug(rotated_frame, pieces)
                     cv2.putText(rotated_frame, "[SNAPSHOT] press key to resume",
