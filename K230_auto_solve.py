@@ -162,21 +162,27 @@ def extract_pieces(frame):
 
 # -------------------- 求解核心 --------------------
 def align_edge(src_pts, src_ei, dst_pts, dst_ei):
-    """刚体变换：src的边src_ei反向对齐到dst的边dst_ei"""
+    """刚体变换：src边反向平行于dst边，中点对齐"""
     ns, nd = len(src_pts), len(dst_pts)
     sa, sb = src_pts[src_ei], src_pts[(src_ei+1)%ns]
     da, db = dst_pts[dst_ei], dst_pts[(dst_ei+1)%nd]
+    # 旋转：src边方向 → dst边反方向
     src_ang = math.atan2(sb[1]-sa[1], sb[0]-sa[0])
     dst_ang = math.atan2(da[1]-db[1], da[0]-db[0])
     rot = dst_ang - src_ang
     cos_r, sin_r = math.cos(rot), math.sin(rot)
+    # 以src边中点为旋转中心
+    smx, smy = (sa[0]+sb[0])/2, (sa[1]+sb[1])/2
     rotated = []
     for x, y in src_pts:
-        dx, dy = x - sa[0], y - sa[1]
-        rotated.append((dx*cos_r - dy*sin_r + sa[0],
-                        dx*sin_r + dy*cos_r + sa[1]))
-    ra = rotated[src_ei]
-    tx, ty = db[0] - ra[0], db[1] - ra[1]
+        dx, dy = x - smx, y - smy
+        rotated.append((dx*cos_r - dy*sin_r + smx,
+                        dx*sin_r + dy*cos_r + smy))
+    # 平移：旋转后的src中点 → dst边中点
+    r_smx = (rotated[src_ei][0] + rotated[(src_ei+1)%ns][0]) / 2
+    r_smy = (rotated[src_ei][1] + rotated[(src_ei+1)%ns][1]) / 2
+    dmx, dmy = (da[0]+db[0])/2, (da[1]+db[1])/2
+    tx, ty = dmx - r_smx, dmy - r_smy
     return [(x+tx, y+ty) for x, y in rotated]
 
 
