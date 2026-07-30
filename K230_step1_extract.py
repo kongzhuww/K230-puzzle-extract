@@ -386,6 +386,36 @@ def draw_debug(rotated_frame, pieces):
                 (8, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2)
 
 
+# -------------------- 写死版：碎片模板 --------------------
+# 实机检测值（边长px，从长到短排序）
+TEMPLATES = [
+    {"id": 1, "name": "大四边形", "n": 4, "edges": [146, 115, 55, 47]},
+    {"id": 2, "name": "窄四边形", "n": 4, "edges": [114, 77, 55, 13]},
+    {"id": 3, "name": "大三角形", "n": 3, "edges": [160, 114, 100]},
+    {"id": 4, "name": "小四边形", "n": 4, "edges": [53, 34, 32, 29]},
+]
+MATCH_TOL_PX = 25  # 每条边允许误差px
+
+
+def match_piece_to_template(piece):
+    """根据边数+边长匹配模板，返回模板id或None"""
+    n = len(piece["proc_pts"])
+    edges = sorted(piece["edges"], reverse=True)
+    best_id, best_err = None, float("inf")
+    for t in TEMPLATES:
+        if t["n"] != n:
+            continue
+        if len(edges) != len(t["edges"]):
+            continue
+        err = sum(abs(a - b) for a, b in zip(edges, t["edges"]))
+        if err < best_err:
+            best_err = err
+            best_id = t["id"]
+    if best_err < MATCH_TOL_PX * n:
+        return best_id
+    return None
+
+
 # -------------------- 主程序 --------------------
 def main():
     fpioa = FPIOA()
@@ -460,6 +490,16 @@ def main():
                             el = ["%dpx" % int(e) for e in p["edges"]]
                         print("  P%d n=%d edges=%s" % (
                             idx + 1, len(p["proc_pts"]), el))
+
+                    # 写死版匹配
+                    print("--- MATCH ---")
+                    for idx, p in enumerate(pieces):
+                        mid = match_piece_to_template(p)
+                        if mid is not None:
+                            name = TEMPLATES[mid - 1]["name"]
+                            print("  P%d -> ID%d (%s)" % (idx+1, mid, name))
+                        else:
+                            print("  P%d -> ???" % (idx+1))
 
                     draw_debug(rotated_frame, pieces)
                     cv2.putText(rotated_frame, "[SNAPSHOT] press key to resume",
